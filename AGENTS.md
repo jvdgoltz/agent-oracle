@@ -1,5 +1,21 @@
 # Coding Agent Instructions
 
+## Project: Agent Oracle
+Local web app that archives coding agent sessions (Codex, Factory Droid, Claude Code)
+into `~/.agent-oracle/` and makes them searchable (text / vector / hybrid) with
+LLM-enriched entities and summaries. The backend also serves coding agents via REST + MCP.
+
+- Backend: Python 3.11+, FastAPI, SQLite (FTS5 + sqlite-vec), FastEmbed, OpenAI API, FastMCP.
+  Source in `src/agent_oracle/`, tests in `tests/` (one `test_*.py` per source module).
+- Frontend: SvelteKit + TypeScript in `frontend/` (scaffolded later).
+
+### Commands
+- Install: `uv sync` (backend), `npm install` (frontend, once scaffolded)
+- Lint/format: `uv run ruff check --fix` and `uv run ruff format`
+- Typecheck: `uv run ty check`
+- Tests: `uv run pytest`
+- Full quality gate: `uvx pre-commit run --all-files`
+
 ## Coding Style
 - Simple functions, proper abstraction. Keep functions short. Code should be self-explanatory. Repository folder structure should be self-explanatory.
 - Every line of code should have intent, and the intent should come from the user instructions.
@@ -31,7 +47,6 @@
 - Ask clarifying questions when the context is unclear or ambiguous.
 
 ## Approach
-- Check `docs/` for plans and their embedded TODO sections that are relevant to the current session.
 - Do not rely on your internal knowledge about APIs, libraries, and tools. Assume that it might be outdated. Use web search and web fetch to retrieve relevant documentation.
 - Implement the basic happy path of any functionality or feature first. Only after confirmation from the user, implement the edge cases.
 - Only implement features and functionality that the user asked for.
@@ -46,17 +61,11 @@
 - Prefer explicit failures over silent bugs. Avoid generic except Exception blocks.
 - If you for some reason implement one, add `logging.error(..., exc_info=True)` or equivalent to surface the stack trace.
 
-## Documentation & Memory
-- Avoid overdocumenting (e.g. README.md in every folder, excessive comments in the code).
-- Keep session-spanning plans in state-specific folders:
-  - `docs/plans/active/YYYY-MM-DD-{plan-name}.md` for plans currently being worked
-  - `docs/plans/pending/YYYY-MM-DD-{plan-name}.md` for approved plans that are not currently active
-  - `docs/plans/completed/YYYY-MM-DD-{plan-name}.md` for finished plans
-- Move the whole plan file between these folders when its state changes.
-- Use `docs/decisions/YYYY-MM-DD.md` to record decisions you made and find past decisions and reasoning behind them.
-- Keep TODOs at the bottom of each plan file (for example, in a `## TODOs` section). Do not use a separate TODO file.
-- Use Markdown checkboxes to show the status:
-  - [ ] pending todo
-  - [x] todo completed
-- Do not remove completed TODOs from plan files; keep them for historical context.
-- When searching through plans and decisions and past todos, use targeted keyword search rather than loading all the files into context.
+## Documentation
+- Code is the documentation. Do not create plan files, decision logs, or any other markdown documentation for code.
+- Agents are expected to answer questions by reading the code. Make sure they can: self-explanatory names and concise, descriptive docstrings on every module, class, and function.
+- The only markdown files in this repo are `README.md`, `AGENTS.md`, `CLAUDE.md`, and `CONVENTIONS.md`.
+
+## Hard constraints
+
+@CONVENTIONS.md

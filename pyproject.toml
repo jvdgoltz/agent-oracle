@@ -1,0 +1,84 @@
+[project]
+name = "agent-oracle"
+version = "0.1.0"
+description = "Local searchable archive of coding agent sessions"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.139.0",
+    "fastembed>=0.8.0",
+    "fastmcp>=3.4.2",
+    "openai>=2.44.0",
+    "sqlite-vec>=0.1.9",
+    "uvicorn[standard]>=0.50.0",
+    "watchdog>=6.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_oracle"]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "ty",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# deptry: ignore DEP002 (unused dependency) for runtime deps that the backend
+# modules will import once they land; remove entries as code appears.
+[tool.deptry.per_rule_ignores]
+DEP002 = [
+    "fastapi",
+    "uvicorn",
+    "fastembed",
+    "sqlite-vec",
+    "openai",
+    "watchdog",
+    "fastmcp",
+]
+
+[tool.vulture]
+min_confidence = 80
+paths = ["src", "tests"]
+exclude = [".venv", "venv", "build", "dist", "frontend"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "C90", "PLR0915", "TD", "FIX", "RUF", "TID252"]
+ignore = []
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-statements = 50
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+
+[tool.ty.terminal]
+output-format = "concise"
+error-on-warning = true
+
+[tool.ty.src]
+respect-ignore-files = true
+exclude = [".venv", "venv", "build", "dist"]
+
+[tool.ty.analysis]
+respect-type-ignore-comments = true
+
+[tool.uv]
+exclude-newer = "30 days"

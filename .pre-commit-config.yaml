@@ -50,7 +50,7 @@ repos:
       # duplicate_code_detection + file_size + function_size -> pylint checks
       - id: pylint-quality
         name: Pylint quality checks
-        entry: uvx pylint --disable=all --enable=duplicate-code,too-many-lines,too-many-statements --min-similarity-lines=8 --max-module-lines=500 --max-statements=50 .
+        entry: uvx pylint --ignore=.venv,venv,frontend,node_modules --disable=all --enable=duplicate-code,too-many-lines,too-many-statements --min-similarity-lines=8 --max-module-lines=500 --max-statements=50 .
         language: system
         pass_filenames: false
 
@@ -60,6 +60,7 @@ repos:
         entry: uvx deptry .
         language: system
         pass_filenames: false
+        exclude: ^frontend/
 
       # secret scanner -> detect-secrets
       - id: detect-secrets
@@ -67,3 +68,47 @@ repos:
         entry: uvx --from detect-secrets detect-secrets-hook
         language: system
         pass_filenames: true
+
+  # TypeScript / frontend checks (frontend/ = SvelteKit). Every hook is gated
+  # by a `files: ^frontend/` filter, so this block is inert until the frontend
+  # scaffold exists. `npx --no-install` fails loudly instead of fetching when
+  # frontend dependencies are not installed.
+  - repo: local
+    hooks:
+      # lint + autofix -> eslint
+      - id: frontend-eslint
+        name: ESLint (frontend)
+        entry: bash -c 'cd frontend && exec npx --no-install eslint --fix "${@#frontend/}"' --
+        language: system
+        files: ^frontend/.*\.(js|jsx|cjs|mjs|ts|tsx|svelte)$
+
+      # typecheck (svelte-check is wired to `npm run check` in the SvelteKit scaffold)
+      - id: frontend-typecheck
+        name: Svelte-check (frontend)
+        entry: bash -c 'cd frontend && exec npm run check' --
+        language: system
+        pass_filenames: false
+        files: ^frontend/
+
+      # unused exports/dependencies -> knip
+      - id: frontend-knip
+        name: Knip (frontend)
+        entry: bash -c 'cd frontend && exec npx --no-install knip' --
+        language: system
+        pass_filenames: false
+        files: ^frontend/
+
+      # duplicate code detection -> jscpd
+      - id: frontend-jscpd
+        name: jscpd (frontend)
+        entry: bash -c 'cd frontend && exec npx --no-install jscpd src' --
+        language: system
+        pass_filenames: false
+        files: ^frontend/
+
+      # secret scanner -> secretlint
+      - id: frontend-secretlint
+        name: Secretlint (frontend)
+        entry: bash -c 'cd frontend && exec npx --no-install secretlint "${@#frontend/}"' --
+        language: system
+        files: ^frontend/
