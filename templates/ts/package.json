@@ -23,17 +23,17 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@secretlint/secretlint-rule-preset-recommend": "^12.2.0",
-    "@types/node": "^25.6.0",
+    "@secretlint/secretlint-rule-preset-recommend": "^13.0.2",
+    "@types/node": "^26.1.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^10.2.1",
     "husky": "^9.0.0",
-    "jscpd": "^4.0.0",
+    "jscpd": "^5.0.11",
     "knip": "^6.6.1",
-    "lint-staged": "^16.0.0",
+    "lint-staged": "^17.0.8",
     "prettier": "^3.0.0",
-    "secretlint": "^12.2.0",
+    "secretlint": "^13.0.2",
     "typescript-eslint": "^8.0.0",
     "typescript": "^6.0.3"
   }
