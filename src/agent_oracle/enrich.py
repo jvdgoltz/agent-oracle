@@ -45,9 +45,20 @@ class Enricher:
     """Extracts entities and a summary from a session via the OpenAI API."""
 
     def __init__(self, model: str = "gpt-5.6", api_key: str | None = None) -> None:
-        """Create an OpenAI client, reading the key from the env when needed."""
+        """Store config; the OpenAI client is created lazily on first use."""
         self.model = model
-        self.client = OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
+        self._api_key = api_key
+        self._client: OpenAI | None = None
+
+    @property
+    def client(self) -> OpenAI:
+        """Return the OpenAI client, creating it on first access."""
+        if self._client is None:
+            key = self._api_key or os.environ.get("OPENAI_API_KEY")
+            if not key:
+                raise RuntimeError("OPENAI_API_KEY is not set; enrichment is unavailable.")
+            self._client = OpenAI(api_key=key)
+        return self._client
 
     def enrich(self, session: Session) -> EnrichmentResult:
         """Build a prompt from the session, call the API, and parse the result."""

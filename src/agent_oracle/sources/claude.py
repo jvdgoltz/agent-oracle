@@ -16,14 +16,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Message, Session
+from agent_oracle.sources.common import MESSAGE_ROLES, parse_timestamp
 
 _MESSAGE_TYPES = {"user", "assistant"}
-_MESSAGE_ROLES = {
-    "user": MessageRole.USER,
-    "assistant": MessageRole.ASSISTANT,
-    "system": MessageRole.SYSTEM,
-}
 
 
 def parse_claude_session(path: Path) -> Session:
@@ -44,7 +40,7 @@ def parse_claude_session(path: Path) -> Session:
 
         session_id = record.get("sessionId", session_id)
         cwd = record.get("cwd", cwd) or cwd
-        timestamp = _parse_timestamp(record.get("timestamp", ""))
+        timestamp = parse_timestamp(record.get("timestamp", ""))
         if started_at == datetime.fromtimestamp(0):
             started_at = timestamp
 
@@ -65,7 +61,7 @@ def _extract_message(record: dict, timestamp: datetime) -> Message | None:
     """Build a :class:`Message` from a Claude message record."""
     msg_data = record.get("message", {})
     role_str = msg_data.get("role", "")
-    role = _MESSAGE_ROLES.get(role_str)
+    role = MESSAGE_ROLES.get(role_str)
     if role is None:
         return None
     text = _extract_content_text(msg_data.get("content"))
@@ -85,10 +81,3 @@ def _extract_content_text(content: object) -> str:
         parts: list[str] = [str(part.get("text", "")) for part in content if isinstance(part, dict)]
         return "".join(parts)
     return ""
-
-
-def _parse_timestamp(raw: str) -> datetime:
-    """Parse an ISO 8601 timestamp string into a :class:`datetime`."""
-    if not raw:
-        return datetime.fromtimestamp(0)
-    return datetime.fromisoformat(raw.replace("Z", "+00:00"))

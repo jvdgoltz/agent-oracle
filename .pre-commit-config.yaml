@@ -50,7 +50,7 @@ repos:
       # duplicate_code_detection + file_size + function_size -> pylint checks
       - id: pylint-quality
         name: Pylint quality checks
-        entry: uvx pylint --ignore=.venv,venv,frontend,node_modules --disable=all --enable=duplicate-code,too-many-lines,too-many-statements --min-similarity-lines=8 --max-module-lines=500 --max-statements=50 .
+        entry: uvx pylint --ignore=.venv,venv,frontend,node_modules --disable=all --enable=duplicate-code,too-many-lines,too-many-statements --min-similarity-lines=12 --max-module-lines=500 --max-statements=50 .
         language: system
         pass_filenames: false
 

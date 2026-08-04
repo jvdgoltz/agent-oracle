@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from agent_oracle.api import create_app
@@ -19,6 +20,8 @@ from agent_oracle.embed import Embedder
 from agent_oracle.enrich import Enricher
 from agent_oracle.store import Store
 from agent_oracle.watcher import SessionWatcher
+
+load_dotenv(override=True)
 
 logging.basicConfig(
     level=logging.INFO,

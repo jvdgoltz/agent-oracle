@@ -87,11 +87,12 @@ def test_enrich_with_mocked_client() -> None:
         }
     ]
     enricher = Enricher(api_key="test-key")
-    with pytest.MonkeyPatch.context() as mp:
-        fake = FakeClient(responses)
-        mp.setattr(enricher, "client", fake)
+    fake = FakeClient(responses)
+    from typing import cast
 
-        result = enricher.enrich(session)
+    enricher._client = cast("OpenAI", fake)
+
+    result = enricher.enrich(session)
 
     assert isinstance(result, EnrichmentResult)
     assert result.summary == "Session built a search engine."
@@ -103,7 +104,7 @@ def test_enrich_creates_openai_client_by_default() -> None:
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("OPENAI_API_KEY", "env-key")
         enricher = Enricher()
-    assert isinstance(enricher.client, OpenAI)
+        assert isinstance(enricher.client, OpenAI)
 
 
 class FakeClient:

@@ -33,7 +33,7 @@ class Store:
 
     def _connect(self) -> sqlite3.Connection:
         """Open the SQLite connection and load the sqlite-vec extension."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)

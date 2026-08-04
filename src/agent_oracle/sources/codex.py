@@ -14,14 +14,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, MessageRole, Session
-
-_MESSAGE_ROLES = {
-    "user": MessageRole.USER,
-    "assistant": MessageRole.ASSISTANT,
-    "developer": MessageRole.DEVELOPER,
-    "system": MessageRole.SYSTEM,
-}
+from agent_oracle.models import AgentType, Message, Session
+from agent_oracle.sources.common import MESSAGE_ROLES, parse_timestamp
 
 
 def parse_codex_session(path: Path) -> Session:
@@ -37,12 +31,12 @@ def parse_codex_session(path: Path) -> Session:
         record = json.loads(line)
         record_type = record.get("type")
         payload = record.get("payload", {})
-        timestamp = _parse_timestamp(record.get("timestamp", ""))
+        timestamp = parse_timestamp(record.get("timestamp", ""))
 
         if record_type == "session_meta":
             session_id = payload.get("id", session_id)
             cwd = payload.get("cwd", "")
-            started_at = _parse_timestamp(payload.get("timestamp", "")) or started_at
+            started_at = parse_timestamp(payload.get("timestamp", "")) or started_at
         elif record_type == "response_item" and payload.get("type") == "message":
             msg = _extract_message(payload, timestamp)
             if msg is not None:
@@ -60,16 +54,9 @@ def parse_codex_session(path: Path) -> Session:
 def _extract_message(payload: dict, timestamp: datetime) -> Message | None:
     """Build a :class:`Message` from a Codex response_item payload."""
     role_str = payload.get("role", "")
-    role = _MESSAGE_ROLES.get(role_str)
+    role = MESSAGE_ROLES.get(role_str)
     if role is None:
         return None
     content_parts = payload.get("content", [])
     text = "".join(part.get("text", "") for part in content_parts if isinstance(part, dict))
     return Message(role=role, content=text, timestamp=timestamp)
-
-
-def _parse_timestamp(raw: str) -> datetime:
-    """Parse an ISO 8601 timestamp string into a :class:`datetime`."""
-    if not raw:
-        return datetime.fromtimestamp(0)
-    return datetime.fromisoformat(raw.replace("Z", "+00:00"))

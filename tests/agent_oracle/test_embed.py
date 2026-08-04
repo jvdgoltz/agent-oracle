@@ -1,12 +1,10 @@
-"""Tests for the FastEmbed wrapper (:mod:`agent_oracle.embed`).
+"""Tests for the FastEmbed embedding wrapper (:mod:`agent_oracle.embed`).
 
-The real FastEmbed model is not downloaded during tests; a stub model
-stand-in is injected to keep tests fast and hermetic.
+The real model is not downloaded during tests; a stub model stand-in is injected
+to keep tests fast and hermetic.
 """
 
 from __future__ import annotations
-
-from collections.abc import Iterator
 
 import numpy as np
 
@@ -15,39 +13,28 @@ from agent_oracle.embed import DEFAULT_MODEL, Embedder
 _DIM = 384
 
 
-class _FakeTextEmbedding:
-    """A stand-in for ``fastembed.TextEmbedding`` returning deterministic vectors."""
+class _FakeModel:
+    """A stand-in for ``TextEmbedding`` returning deterministic vectors."""
 
-    def __init__(self, model_name: str | None = None) -> None:
+    def __init__(self, model_name: str | None = None, **_kwargs: object) -> None:
         """Record the requested model name and the call count."""
         self.model_name = model_name
         self.calls = 0
 
-    def embed(self, texts: list[str], **_kwargs: object) -> Iterator[np.ndarray]:
-        """Yield a fake embedding per text, tracking the invocation count."""
+    def embed(self, documents: list[str], **_kwargs: object) -> object:
+        """Return fake embeddings as a numpy array iterator."""
         self.calls += 1
-        for _ in texts:
-            yield np.zeros(_DIM, dtype=np.float32)
+        yield from np.zeros((len(documents), _DIM), dtype=np.float32)
 
-    def query_embed(self, query: str, **_kwargs: object) -> Iterator[np.ndarray]:
-        """Yield a fake query embedding, tracking the invocation count."""
+    def query_embed(self, queries: list[str], **_kwargs: object) -> object:
+        """Return fake query embeddings as a numpy array iterator."""
         self.calls += 1
-        yield np.ones(_DIM, dtype=np.float32)
-
-    @property
-    def embedding_size(self) -> int:
-        """Return the fake embedding dimension."""
-        return _DIM
-
-
-# --------------------------------------------------------------------------- #
-# embed
-# --------------------------------------------------------------------------- #
+        yield from np.zeros((len(queries), _DIM), dtype=np.float32)
 
 
 def test_embed_returns_float_list_of_expected_dimension() -> None:
     """A single embedding is a list of floats with the model dimension."""
-    embedder = Embedder(_model=_FakeTextEmbedding())
+    embedder = Embedder(_model=_FakeModel())
     vector = embedder.embed("hello world")
 
     assert isinstance(vector, list)
@@ -57,18 +44,13 @@ def test_embed_returns_float_list_of_expected_dimension() -> None:
 
 def test_embed_accepts_empty_or_short_text() -> None:
     """Embedding handles a one-word string without error."""
-    embedder = Embedder(_model=_FakeTextEmbedding())
+    embedder = Embedder(_model=_FakeModel())
     assert len(embedder.embed("hi")) == _DIM
-
-
-# --------------------------------------------------------------------------- #
-# embed_batch
-# --------------------------------------------------------------------------- #
 
 
 def test_embed_batch_returns_one_embedding_per_text() -> None:
     """Batch embedding yields as many vectors as input texts."""
-    embedder = Embedder(_model=_FakeTextEmbedding())
+    embedder = Embedder(_model=_FakeModel())
     vectors = embedder.embed_batch(["one", "two", "three"])
 
     assert len(vectors) == 3
@@ -77,18 +59,13 @@ def test_embed_batch_returns_one_embedding_per_text() -> None:
 
 def test_embed_batch_empty_list() -> None:
     """Batch embedding of no texts returns no vectors."""
-    embedder = Embedder(_model=_FakeTextEmbedding())
+    embedder = Embedder(_model=_FakeModel())
     assert embedder.embed_batch([]) == []
-
-
-# --------------------------------------------------------------------------- #
-# embed_query
-# --------------------------------------------------------------------------- #
 
 
 def test_embed_query_returns_float_list() -> None:
     """A query embedding is a list of floats with the model dimension."""
-    embedder = Embedder(_model=_FakeTextEmbedding())
+    embedder = Embedder(_model=_FakeModel())
     vector = embedder.embed_query("search query")
 
     assert isinstance(vector, list)
@@ -96,28 +73,17 @@ def test_embed_query_returns_float_list() -> None:
     assert all(isinstance(v, float) for v in vector)
 
 
-# --------------------------------------------------------------------------- #
-# dimension
-# --------------------------------------------------------------------------- #
-
-
 def test_dimension_matches_model() -> None:
     """dimension exposes the underlying model embedding size."""
-    embedder = Embedder(_model=_FakeTextEmbedding())
+    embedder = Embedder(_model=_FakeModel())
     assert embedder.dimension == _DIM
-
-
-# --------------------------------------------------------------------------- #
-# lazy model loading
-# --------------------------------------------------------------------------- #
 
 
 def test_model_loaded_lazily_and_cached() -> None:
     """The model is constructed once and reused across calls."""
-    model = _FakeTextEmbedding()
+    model = _FakeModel()
     embedder = Embedder(_model=model)
 
-    # Nothing is loaded at construction time.
     assert model.calls == 0
 
     embedder.embed("first")

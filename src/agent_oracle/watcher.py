@@ -118,18 +118,26 @@ class SessionWatcher:
             logger.error("Failed to index session file %s", path, exc_info=True)
 
     def _embed_messages(self, session: Session) -> None:
-        """Embed each indexed message and write embeddings to the store."""
+        """Batch-embed all messages in a session and store the vectors."""
         indexed = self.store.get_session(session.id)
         if indexed is None:
             logger.warning("No stored messages for session %s; skipping embeddings", session.id)
             return
-        for message in indexed["messages"]:
-            embedding = self.embedder.embed(message["content"])
-            self.store.upsert_embedding(message["id"], embedding)
+        messages = indexed["messages"]
+        if not messages:
+            return
+        texts = [msg["content"] for msg in messages]
+        embeddings = self.embedder.embed_batch(texts)
+        for msg, embedding in zip(messages, embeddings, strict=True):
+            self.store.upsert_embedding(msg["id"], embedding)
 
     def _enrich_session(self, session: Session) -> None:
         """Enrich the session with the LLM and persist summary and entities."""
-        result: EnrichmentResult = self.enricher.enrich(session)
+        try:
+            result: EnrichmentResult = self.enricher.enrich(session)
+        except RuntimeError as exc:
+            logger.warning("Skipping enrichment for %s: %s", session.id, exc)
+            return
         self.store.set_summary(session.id, result.summary)
         entities = [{"type": entity.type, "value": entity.value} for entity in result.entities]
         self.store.upsert_entities(session.id, entities)

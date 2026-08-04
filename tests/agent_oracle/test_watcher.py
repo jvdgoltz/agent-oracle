@@ -146,7 +146,7 @@ def test_index_file_routes_to_codex_normalizer(tmp_path: Path) -> None:
     watcher, store, embedder, enricher = _make_watcher()
 
     store.get_session.return_value = {"messages": [{"id": 1, "content": "hi"}]}
-    embedder.embed.return_value = [0.1, 0.2]
+    embedder.embed_batch.return_value = [[0.1, 0.2]]
     enricher.enrich.return_value = EnrichmentResult(
         summary="s", entities=[Entity(type="product", value="SQLite")]
     )
@@ -158,7 +158,7 @@ def test_index_file_routes_to_codex_normalizer(tmp_path: Path) -> None:
     session = store.index_session.call_args.args[0]
     assert isinstance(session, Session)
     assert session.agent == AgentType.CODEX
-    embedder.embed.assert_called_once_with("hi")
+    embedder.embed_batch.assert_called_once_with(["hi"])
     store.upsert_embedding.assert_called_once_with(1, [0.1, 0.2])
     enricher.enrich.assert_called_once()
     store.set_summary.assert_called_once_with("codex-sess", "s")

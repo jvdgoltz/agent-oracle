@@ -23,9 +23,3 @@ Hard, non-negotiable conventions for this repository. They apply to humans and a
 
 - Secrets are never committed, hardcoded, or logged; credentials come from the environment.
 - This project reads only local agent session data and writes only to its own local data directory; data leaves the machine only through deliberate LLM API calls.
-
-## Philosophy
-
-- Code is the documentation. Agents do not create prose documentation, plan files, or decision logs; markdown in this repo is limited to the files the user chooses to keep.
-- Code answers questions by being read: self-explanatory names, small single-purpose functions, proper abstraction, and a concise, descriptive docstring on every module, class, and function.
-- There are no backward- or forward-compatibility obligations.

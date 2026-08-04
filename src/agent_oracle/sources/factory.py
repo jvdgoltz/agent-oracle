@@ -14,14 +14,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, MessageRole, Session
-
-_MESSAGE_ROLES = {
-    "user": MessageRole.USER,
-    "assistant": MessageRole.ASSISTANT,
-    "developer": MessageRole.DEVELOPER,
-    "system": MessageRole.SYSTEM,
-}
+from agent_oracle.models import AgentType, Message, Session
+from agent_oracle.sources.common import MESSAGE_ROLES, parse_timestamp
 
 
 def parse_factory_session(path: Path) -> Session:
@@ -41,7 +35,7 @@ def parse_factory_session(path: Path) -> Session:
             session_id = record.get("id", session_id)
             cwd = record.get("cwd", "")
         elif record_type == "message":
-            timestamp = _parse_timestamp(record.get("timestamp", ""))
+            timestamp = parse_timestamp(record.get("timestamp", ""))
             msg = _extract_message(record, timestamp)
             if msg is not None:
                 if not started_at or started_at == datetime.fromtimestamp(0):
@@ -64,7 +58,7 @@ def _extract_message(record: dict, timestamp: datetime) -> Message | None:
     """Build a :class:`Message` from a Factory message record."""
     msg_data = record.get("message", {})
     role_str = msg_data.get("role", "")
-    role = _MESSAGE_ROLES.get(role_str)
+    role = MESSAGE_ROLES.get(role_str)
     if role is None:
         return None
     content_parts = msg_data.get("content", [])
@@ -75,10 +69,3 @@ def _extract_message(record: dict, timestamp: datetime) -> Message | None:
         timestamp=timestamp,
         message_id=record.get("id"),
     )
-
-
-def _parse_timestamp(raw: str) -> datetime:
-    """Parse an ISO 8601 timestamp string into a :class:`datetime`."""
-    if not raw:
-        return datetime.fromtimestamp(0)
-    return datetime.fromisoformat(raw.replace("Z", "+00:00"))

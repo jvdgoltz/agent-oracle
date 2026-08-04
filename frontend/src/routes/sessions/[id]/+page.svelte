@@ -87,7 +87,7 @@
 			{#if session.summary}
 				<p class="summary">{session.summary}</p>
 			{/if}
-			{#if session.entities.length > 0}
+			{#if session.entities && session.entities.length > 0}
 				<div class="entities">
 					{#each session.entities as entity (entity.value)}
 						<span class="tag">{entity.type}: {entity.value}</span>
