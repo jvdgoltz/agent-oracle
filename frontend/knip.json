@@ -1,4 +1,5 @@
 {
 	"$schema": "https://unpkg.com/knip@6/schema.json",
-	"ignoreDependencies": ["jscpd", "secretlint", "@secretlint/secretlint-rule-preset-recommend"]
+	"ignoreDependencies": ["jscpd", "secretlint", "@secretlint/secretlint-rule-preset-recommend"],
+	"entry": ["src/routes/**", "src/lib/api.ts", "src/lib/AgentBadge.svelte", "src/lib/format.ts"]
 }

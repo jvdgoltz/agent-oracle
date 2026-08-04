@@ -33,6 +33,7 @@ testpaths = ["tests"]
 # deptry: ignore DEP002 (unused dependency) for runtime deps that the backend
 # modules will import once they land; remove entries as code appears.
 [tool.deptry.per_rule_ignores]
+DEP001 = ["agent_oracle", "numpy"]
 DEP002 = [
     "fastapi",
     "uvicorn",
@@ -45,7 +46,7 @@ DEP002 = [
 
 [tool.vulture]
 min_confidence = 80
-paths = ["src", "tests"]
+paths = ["src", "tests", ".vulture_whitelist.py"]
 exclude = [".venv", "venv", "build", "dist", "frontend"]
 
 [tool.ruff]

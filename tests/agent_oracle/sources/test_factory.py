@@ -1,0 +1,93 @@
+"""Tests for the Factory Droid session normalizer."""
+
+import json
+from pathlib import Path
+
+from agent_oracle.models import AgentType, MessageRole
+from agent_oracle.sources.factory import parse_factory_session
+
+
+def _write_jsonl(tmp_path: Path, lines: list[dict]) -> Path:
+    """Write a JSONL file from a list of dicts and return its path."""
+    p = tmp_path / "test-session.jsonl"
+    p.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+    return p
+
+
+def test_parse_basic_session(tmp_path: Path) -> None:
+    """A session_start followed by user and assistant messages."""
+    lines = [
+        {
+            "type": "session_start",
+            "id": "fac-001",
+            "title": "Test Session",
+            "owner": "user",
+            "version": 2,
+            "cwd": "/tmp/project",
+        },
+        {
+            "type": "message",
+            "id": "msg-001",
+            "timestamp": "2026-07-03T14:16:22.322Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello factory"}],
+            },
+        },
+        {
+            "type": "message",
+            "id": "msg-002",
+            "timestamp": "2026-07-03T14:16:26.724Z",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hi from factory"}],
+            },
+        },
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    session = parse_factory_session(path)
+
+    assert session.id == "fac-001"
+    assert session.agent is AgentType.FACTORY
+    assert session.cwd == "/tmp/project"
+    assert len(session.messages) == 2
+    assert session.messages[0].role is MessageRole.USER
+    assert session.messages[0].content == "Hello factory"
+    assert session.messages[1].role is MessageRole.ASSISTANT
+    assert session.messages[1].content == "Hi from factory"
+
+
+def test_parse_skips_non_message_records(tmp_path: Path) -> None:
+    """Records that are not messages are skipped."""
+    lines = [
+        {"type": "session_start", "id": "fac-002", "cwd": "/x"},
+        {"type": "settings_update", "id": "s1", "cwd": "/x"},
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    session = parse_factory_session(path)
+
+    assert session.id == "fac-002"
+    assert len(session.messages) == 0
+
+
+def test_parse_concatenates_content_parts(tmp_path: Path) -> None:
+    """Multiple text content parts are joined."""
+    lines = [
+        {"type": "session_start", "id": "fac-003", "cwd": "/x"},
+        {
+            "type": "message",
+            "id": "msg-1",
+            "timestamp": "2026-07-03T14:16:22.322Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "first "},
+                    {"type": "text", "text": "second"},
+                ],
+            },
+        },
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    session = parse_factory_session(path)
+
+    assert session.messages[0].content == "first second"

@@ -1,23 +1,46 @@
 version: 2
 updates:
-  - package-ecosystem: "pip"
-    directory: "/templates/py"
+  - package-ecosystem: "uv"
+    directory: "/"
     schedule:
-      interval: "semiannually"
+      interval: "monthly"
     cooldown:
       default-days: 30
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "deps"
+      include: "scope"
     groups:
       python-dependencies:
+        applies-to: "version-updates"
         patterns:
           - "*"
 
   - package-ecosystem: "npm"
-    directory: "/templates/ts"
+    directory: "/frontend"
     schedule:
-      interval: "semiannually"
+      interval: "monthly"
     cooldown:
       default-days: 30
+    labels: ["dependencies", "frontend"]
+    commit-message:
+      prefix: "deps"
+      include: "scope"
     groups:
       npm-dependencies:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      actions-dependencies:
+        applies-to: "version-updates"
         patterns:
           - "*"
