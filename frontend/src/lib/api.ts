@@ -109,6 +109,12 @@ export function getSession(id: string): Promise<SessionDetail> {
 	return get(`/api/sessions/${encodeURIComponent(id)}`);
 }
 
+/** Response shape from `GET /api/search`. */
+export interface SearchResponse {
+	results: SearchResult[];
+	ai_summary: string;
+}
+
 /**
  * Search sessions across their text/vector/hybrid indexes.
  * @param q - Search query text.
@@ -123,7 +129,7 @@ export function search(
 	limit = 20,
 	agent?: string,
 	entity?: string
-): Promise<{ results: SearchResult[] }> {
+): Promise<SearchResponse> {
 	const params = new URLSearchParams({ q, mode, limit: String(limit) });
 	if (agent) params.set('agent', agent);
 	if (entity) params.set('entity', entity);

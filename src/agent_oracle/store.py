@@ -22,6 +22,24 @@ _EMBED_DIM = 384
 _RRF_K = 60
 
 
+def _sanitize_fts_query(query: str) -> str:
+    """Escape a user query into a safe FTS5 MATCH expression.
+
+    FTS5 treats characters like ``? * " ( )`` as query syntax.  To avoid
+    syntax errors, each whitespace-separated token is wrapped in double
+    quotes (phrase query), and any embedded double quotes are doubled
+    (FTS5 escape rule).  Returns an empty string if nothing remains.
+    """
+    tokens = query.strip().split()
+    if not tokens:
+        return ""
+    escaped = []
+    for token in tokens:
+        safe = token.replace('"', '""')
+        escaped.append(f'"{safe}"')
+    return " ".join(escaped)
+
+
 class Store:
     """Persistent SQLite store for sessions, messages, embeddings, and entities."""
 
@@ -34,8 +52,9 @@ class Store:
 
     def _connect(self) -> sqlite3.Connection:
         """Open the SQLite connection and load the sqlite-vec extension."""
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         return conn
@@ -108,7 +127,7 @@ class Store:
             "INSERT OR REPLACE INTO sessions (id, agent, cwd, started_at, summary, enriched) "
             "VALUES (?, ?, ?, ?, "
             "(SELECT summary FROM sessions WHERE id = ?), "
-            "(SELECT enriched FROM sessions WHERE id = ?))",
+            "COALESCE((SELECT enriched FROM sessions WHERE id = ?), 0))",
             (
                 session.id,
                 session.agent.value,
@@ -145,9 +164,14 @@ class Store:
         logger.debug("Indexed session %s with %d messages", session.id, len(session.messages))
 
     def _delete_session_messages(self, session_id: str) -> None:
-        """Remove all messages and FTS entries for *session_id*."""
+        """Remove all messages and their FTS and vector index entries for *session_id*."""
         self.conn.execute(
             "DELETE FROM messages_fts WHERE rowid IN "
+            "(SELECT id FROM messages WHERE session_id = ?)",
+            (session_id,),
+        )
+        self.conn.execute(
+            "DELETE FROM vec_messages WHERE rowid IN "
             "(SELECT id FROM messages WHERE session_id = ?)",
             (session_id,),
         )
@@ -253,6 +277,9 @@ class Store:
 
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """FTS5 BM25 search over messages and session summaries."""
+        fts_query = _sanitize_fts_query(query)
+        if not fts_query:
+            return []
         message_rows = self.conn.execute(
             """
             SELECT m.session_id        AS session_id,
@@ -269,7 +296,7 @@ class Store:
             ORDER BY rank
             LIMIT ?
             """,
-            (query, limit),
+            (fts_query, limit),
         ).fetchall()
         summary_rows = self.conn.execute(
             """
@@ -286,7 +313,7 @@ class Store:
             ORDER BY rank
             LIMIT ?
             """,
-            (query, limit),
+            (fts_query, limit),
         ).fetchall()
         merged = sorted(
             (dict(r) for r in (*message_rows, *summary_rows)),

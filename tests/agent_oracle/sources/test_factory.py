@@ -91,3 +91,72 @@ def test_parse_concatenates_content_parts(tmp_path: Path) -> None:
     session = parse_factory_session(path)
 
     assert session.messages[0].content == "first second"
+
+
+def test_parse_thinking_part_uses_thinking_field(tmp_path: Path) -> None:
+    """Thinking parts store their text in the 'thinking' field, not 'text'."""
+    lines = [
+        {"type": "session_start", "id": "fac-004", "cwd": "/x"},
+        {
+            "type": "message",
+            "id": "msg-1",
+            "timestamp": "2026-07-03T14:16:22.322Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "pondering deeply"},
+                    {"type": "text", "text": "The answer."},
+                ],
+            },
+        },
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    session = parse_factory_session(path)
+
+    assert len(session.messages) == 2
+    assert session.messages[0].content == "pondering deeply"
+    assert session.messages[0].is_thinking is True
+    assert session.messages[1].content == "The answer."
+    assert session.messages[1].is_thinking is False
+
+
+def test_parse_skips_tool_parts(tmp_path: Path) -> None:
+    """tool_use and tool_result parts are not added to the index."""
+    lines = [
+        {"type": "session_start", "id": "fac-005", "cwd": "/x"},
+        {
+            "type": "message",
+            "id": "msg-1",
+            "timestamp": "2026-07-03T14:16:22.322Z",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "name": "Skill", "input": {"skill": "x"}}],
+            },
+        },
+        {
+            "type": "message",
+            "id": "msg-2",
+            "timestamp": "2026-07-03T14:16:30.000Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "content": "tool output text"}],
+            },
+        },
+        {
+            "type": "message",
+            "id": "msg-3",
+            "timestamp": "2026-07-03T14:16:40.000Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "name": "Read", "input": {}},
+                    {"type": "text", "text": "Visible reply."},
+                ],
+            },
+        },
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    session = parse_factory_session(path)
+
+    assert len(session.messages) == 1
+    assert session.messages[0].content == "Visible reply."

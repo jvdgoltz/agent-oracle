@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent_oracle.embed import Embedder
+from agent_oracle.enrich import Enricher
 from agent_oracle.store import Store
 
 logger = logging.getLogger(__name__)
@@ -22,15 +23,17 @@ logger = logging.getLogger(__name__)
 SearchResult = dict[str, Any]
 
 
-def create_app(store: Store, embedder: Embedder) -> FastAPI:
+def create_app(store: Store, embedder: Embedder, enricher: Enricher | None = None) -> FastAPI:
     """Build and configure the Agent Oracle FastAPI application.
 
-    The *store* and *embedder* are attached to ``app.state`` and CORS is enabled
-    for all origins to support local development against the backend.
+    The *store*, *embedder*, and optional *enricher* are attached to
+    ``app.state`` and CORS is enabled for all origins to support local
+    development against the backend.
     """
     app = FastAPI(title="Agent Oracle API", version="0.1.0")
     app.state.store = store
     app.state.embedder = embedder
+    app.state.enricher = enricher
 
     app.add_middleware(
         CORSMiddleware,
@@ -88,11 +91,17 @@ def _register_routes(app: FastAPI) -> None:
         results = _run_search(store, embedder, q, mode, limit)
         results = _filter_results(store, results, agent=agent, entity=entity)
         entities = store.list_entities([r["session_id"] for r in results])
-        return {
-            "results": [
-                _payload(r, _normalize_entities(entities.get(r["session_id"], []))) for r in results
-            ]
-        }
+        payloads = [
+            _payload(r, _normalize_entities(entities.get(r["session_id"], []))) for r in results
+        ]
+        ai_summary = ""
+        enricher = request.app.state.enricher
+        if enricher is not None and payloads:
+            try:
+                ai_summary = enricher.summarize_search(q, payloads)
+            except Exception:
+                logger.warning("Search summary generation failed", exc_info=True)
+        return {"results": payloads, "ai_summary": ai_summary}
 
     @app.get("/api/entities")
     def get_entities(request: Request, session_id: str) -> dict[str, Any]:

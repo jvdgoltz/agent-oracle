@@ -36,11 +36,11 @@ def parse_factory_session(path: Path) -> Session:
             cwd = record.get("cwd", "")
         elif record_type == "message":
             timestamp = parse_timestamp(record.get("timestamp", ""))
-            msg = _extract_message(record, timestamp)
-            if msg is not None:
+            extracted = _extract_messages(record, timestamp)
+            if extracted:
                 if not started_at or started_at == datetime.fromtimestamp(0):
                     started_at = timestamp
-                messages.append(msg)
+                messages.extend(extracted)
 
     if started_at == datetime.fromtimestamp(0) and messages:
         started_at = messages[0].timestamp
@@ -54,27 +54,48 @@ def parse_factory_session(path: Path) -> Session:
     )
 
 
-def _extract_message(record: dict, timestamp: datetime) -> Message | None:
-    """Build a :class:`Message` from a Factory message record."""
-    msg_data = record.get("message", {})
-    role_str = msg_data.get("role", "")
-    role = MESSAGE_ROLES.get(role_str)
-    if role is None:
-        return None
-    content_parts = msg_data.get("content", [])
+def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
+    """Build one :class:`Message` per logical part of a Factory message record.
 
-    is_thinking = any(isinstance(p, dict) and p.get("type") == "thinking" for p in content_parts)
+    Factory content arrays mix part types: ``text`` (concatenated into one
+    message) and ``thinking`` (text lives in the ``thinking`` field, emitted as
+    a thinking message). ``tool_use`` and ``tool_result`` parts are skipped:
+    tool traffic is not conversation and must not enter the index.
+    Records producing no content yield no messages.
+    """
+    msg_data = record.get("message", {})
+    role = MESSAGE_ROLES.get(msg_data.get("role", ""))
+    if role is None:
+        return []
+    content_parts = msg_data.get("content", [])
+    message_id = record.get("id")
     is_injected = msg_data.get("visibility") == "llm_only"
     is_system = role is MessageRole.SYSTEM
 
-    text = "".join(part.get("text", "") for part in content_parts if isinstance(part, dict))
+    def build(content: str, *, is_thinking: bool = False) -> Message:
+        return Message(
+            role=role,
+            content=content,
+            timestamp=timestamp,
+            message_id=message_id,
+            is_thinking=is_thinking,
+            is_system_instruction=is_system,
+            is_injected=is_injected,
+        )
 
-    return Message(
-        role=role,
-        content=text,
-        timestamp=timestamp,
-        message_id=record.get("id"),
-        is_thinking=is_thinking,
-        is_system_instruction=is_system,
-        is_injected=is_injected,
+    messages: list[Message] = []
+
+    for part in content_parts:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "thinking":
+            thinking = part.get("thinking", "")
+            if thinking:
+                messages.append(build(thinking, is_thinking=True))
+
+    text = "".join(
+        p.get("text", "") for p in content_parts if isinstance(p, dict) and p.get("type") == "text"
     )
+    if text:
+        messages.append(build(text))
+    return messages

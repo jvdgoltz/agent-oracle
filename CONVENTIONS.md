@@ -23,3 +23,15 @@ Hard, non-negotiable conventions for this repository. They apply to humans and a
 
 - Secrets are never committed, hardcoded, or logged; credentials come from the environment.
 - This project reads only local agent session data and writes only to its own local data directory; data leaves the machine only through deliberate LLM API calls.
+
+## Local development
+
+- Backend and frontend are started with hot reload enabled.
+
+## Data integrity
+
+- The database is never deleted or re-indexed from scratch. Schema changes must migrate the existing database without data loss, and a backup is created before any migration runs.
+
+## Indexed content
+
+- Sessions include user, assistant, thinking, system, developer, and injected-instruction messages. Tool calls and tool results are agent traffic, not conversation, and are never added to the index.

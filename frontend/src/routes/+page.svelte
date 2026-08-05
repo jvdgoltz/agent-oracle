@@ -36,6 +36,7 @@
 	let agent = $state('');
 	let searching = $state(false);
 	let results: SearchResult[] = $state([]);
+	let aiSummary = $state('');
 	let error = $state<string | null>(null);
 
 	/**
@@ -64,6 +65,7 @@
 		if (!query.trim()) {
 			searching = false;
 			results = [];
+			aiSummary = '';
 			return;
 		}
 		searching = true;
@@ -71,9 +73,11 @@
 		try {
 			const data = await search(query.trim(), mode, 20, agent || undefined);
 			results = data.results;
+			aiSummary = data.ai_summary ?? '';
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Search failed';
 			results = [];
+			aiSummary = '';
 		} finally {
 			searching = false;
 		}
@@ -177,6 +181,12 @@
 				<p class="empty-sub">Try a different query or switch to a different search mode.</p>
 			</div>
 		{:else}
+			{#if aiSummary}
+				<div class="ai-summary">
+					<div class="ai-summary-icon">✦</div>
+					<p class="ai-summary-text">{aiSummary}</p>
+				</div>
+			{/if}
 			<ul class="card-list">
 				{#each results as result, i (result.session_id + i)}
 					<li>
@@ -521,6 +531,30 @@
 	}
 
 	/* ── Search result cards ─────────────────────────────────────── */
+
+	.ai-summary {
+		display: flex;
+		gap: var(--s3);
+		padding: var(--s4) var(--s5);
+		background-color: var(--surface);
+		border: 1px solid var(--accent);
+		border-radius: var(--r3);
+		margin-bottom: var(--s3);
+	}
+
+	.ai-summary-icon {
+		flex-shrink: 0;
+		font-size: 16px;
+		color: var(--accent);
+		line-height: 1.4;
+	}
+
+	.ai-summary-text {
+		margin: 0;
+		font-size: 13px;
+		line-height: 1.5;
+		color: var(--text);
+	}
 
 	.score-badge {
 		margin-left: auto;

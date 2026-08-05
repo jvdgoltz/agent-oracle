@@ -74,6 +74,37 @@ class Enricher:
             return EnrichmentResult(summary="", entities=[])
         return self._parse_response(raw)
 
+    def summarize_search(self, query: str, results: list[dict]) -> str:
+        """Generate a short AI summary of search results given the query.
+
+        Takes the user's *query* and the top *results* (each a dict with at
+        least ``snippet`` and ``summary`` keys) and asks the LLM to synthesize
+        a 2-3 sentence answer that addresses the query based on the results.
+        Returns an empty string if the API call fails or no results are given.
+        """
+        if not results:
+            return ""
+        context_parts: list[str] = []
+        for i, result in enumerate(results[:5], 1):
+            snippet = result.get("snippet", "")
+            summary = result.get("summary", "")
+            context_parts.append(f"[{i}] Summary: {summary}\n    Snippet: {snippet}")
+        context = "\n\n".join(context_parts)
+        prompt = (
+            "A user searched for the following query in an archive of coding agent sessions:\n"
+            f'Query: "{query}"\n\n'
+            "Here are the top search results:\n\n"
+            f"{context}\n\n"
+            "Write a concise 2-3 sentence summary that synthesizes what these sessions "
+            "reveal in relation to the user's query. Do not reference the results by number. "
+            "Answer directly as if responding to the user."
+        )
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (response.choices[0].message.content or "").strip()
+
     def _build_prompt(self, session: Session) -> str:
         """Concatenate message contents, truncated, into an extraction prompt."""
         transcript = "\n".join(message.content for message in session.messages)

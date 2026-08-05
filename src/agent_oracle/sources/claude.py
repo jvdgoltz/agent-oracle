@@ -44,9 +44,8 @@ def parse_claude_session(path: Path) -> Session:
         if started_at == datetime.fromtimestamp(0):
             started_at = timestamp
 
-        msg = _extract_message(record, timestamp)
-        if msg is not None:
-            messages.append(msg)
+        msg = _extract_messages(record, timestamp)
+        messages.extend(msg)
 
     return Session(
         id=session_id,
@@ -57,44 +56,50 @@ def parse_claude_session(path: Path) -> Session:
     )
 
 
-def _extract_message(record: dict, timestamp: datetime) -> Message | None:
-    """Build a :class:`Message` from a Claude message record."""
+def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
+    """Build :class:`Message` objects from a Claude message record.
+
+    Claude content can be a plain string (user turns) or an array of parts:
+    ``text`` parts are concatenated into one message; ``thinking`` parts carry
+    their text in the ``thinking`` field (often empty for redacted thinking,
+    which is skipped); ``tool_use`` and ``tool_result`` parts are tool traffic
+    and never enter the index. Records with no conversation content yield no
+    messages.
+    """
     msg_data = record.get("message", {})
-    role_str = msg_data.get("role", "")
-    role = MESSAGE_ROLES.get(role_str)
+    role = MESSAGE_ROLES.get(msg_data.get("role", ""))
     if role is None:
-        return None
+        return []
     content = msg_data.get("content")
-    text = _extract_content_text(content)
-    is_thinking = _has_thinking_content(content)
     model = msg_data.get("model")
-    is_system = role is MessageRole.SYSTEM
     is_injected = bool(record.get("isMeta"))
 
-    return Message(
-        role=role,
-        content=text,
-        timestamp=timestamp,
-        message_id=record.get("uuid"),
-        is_thinking=is_thinking,
-        model=model,
-        is_system_instruction=is_system,
-        is_injected=is_injected,
-    )
+    def build(content_text: str, *, is_thinking: bool = False) -> Message:
+        return Message(
+            role=role,
+            content=content_text,
+            timestamp=timestamp,
+            message_id=record.get("uuid"),
+            is_thinking=is_thinking,
+            model=model,
+            is_system_instruction=role is MessageRole.SYSTEM,
+            is_injected=is_injected,
+        )
 
-
-def _has_thinking_content(content: object) -> bool:
-    """Return True when the content array contains a thinking part."""
-    if not isinstance(content, list):
-        return False
-    return any(isinstance(p, dict) and p.get("type") == "thinking" for p in content)
-
-
-def _extract_content_text(content: object) -> str:
-    """Extract text from Claude content which can be a string or array."""
     if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = [str(part.get("text", "")) for part in content if isinstance(part, dict)]
-        return "".join(parts)
-    return ""
+        return [build(content)] if content else []
+    if not isinstance(content, list):
+        return []
+
+    messages: list[Message] = []
+    text = "".join(
+        p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+    )
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "thinking":
+            thinking = part.get("thinking", "")
+            if thinking:
+                messages.append(build(thinking, is_thinking=True))
+    if text:
+        messages.append(build(text))
+    return messages

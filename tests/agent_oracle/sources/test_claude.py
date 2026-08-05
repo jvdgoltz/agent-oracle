@@ -107,3 +107,89 @@ def test_parse_content_as_string(tmp_path: Path) -> None:
     session = parse_claude_session(path)
 
     assert session.messages[0].content == "plain text content"
+
+
+def test_parse_thinking_part_uses_thinking_field(tmp_path: Path) -> None:
+    """Thinking parts store their text in the 'thinking' field, not 'text'."""
+    lines = [
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "inner reasoning"},
+                    {"type": "text", "text": "The reply."},
+                ],
+            },
+            "uuid": "a1",
+            "timestamp": "2026-07-23T15:01:25.000Z",
+            "sessionId": "claude-004",
+            "cwd": "/x",
+        },
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    session = parse_claude_session(path)
+
+    assert len(session.messages) == 2
+    assert session.messages[0].content == "inner reasoning"
+    assert session.messages[0].is_thinking is True
+    assert session.messages[1].content == "The reply."
+    assert session.messages[1].is_thinking is False
+
+
+def test_parse_skips_tool_and_empty_thinking_parts(tmp_path: Path) -> None:
+    """tool_use/tool_result parts and empty thinking never produce messages."""
+    lines = [
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "name": "Read", "input": {}}],
+            },
+            "uuid": "a1",
+            "timestamp": "2026-07-23T15:01:25.000Z",
+            "sessionId": "claude-005",
+            "cwd": "/x",
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "content": "tool output"}],
+            },
+            "uuid": "u1",
+            "timestamp": "2026-07-23T15:01:26.000Z",
+            "sessionId": "claude-005",
+            "cwd": "/x",
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": "abc"}],
+            },
+            "uuid": "a2",
+            "timestamp": "2026-07-23T15:01:27.000Z",
+            "sessionId": "claude-005",
+            "cwd": "/x",
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "name": "Read", "input": {}},
+                    {"type": "text", "text": "Visible reply."},
+                ],
+            },
+            "uuid": "a3",
+            "timestamp": "2026-07-23T15:01:28.000Z",
+            "sessionId": "claude-005",
+            "cwd": "/x",
+        },
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    session = parse_claude_session(path)
+
+    assert len(session.messages) == 1
+    assert session.messages[0].content == "Visible reply."

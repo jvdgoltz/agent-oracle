@@ -61,7 +61,8 @@ def _start_background_indexing(watcher: SessionWatcher) -> None:
 
 
 #: Lazy-initialised global app instance for uvicorn import.
-app: FastAPI = create_app(*_create_components()[:2])
+_components = _create_components()
+app: FastAPI = create_app(_components[0], _components[1], enricher=_components[2])
 
 #: The watcher is started once on import so live changes are tracked.
 _watcher_instance: SessionWatcher | None = None
