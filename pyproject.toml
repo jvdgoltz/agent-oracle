@@ -6,12 +6,12 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139.0",
     "fastembed>=0.8.0",
-    "fastmcp>=3.4.2",
+    "fastmcp>=3.4.3",
     "numpy>=2.1.0",
     "openai>=2.44.0",
     "python-dotenv>=1.2.2",
     "sqlite-vec>=0.1.9",
-    "uvicorn[standard]>=0.50.0",
+    "uvicorn[standard]>=0.50.1",
     "watchdog>=6.0.0",
 ]
 
