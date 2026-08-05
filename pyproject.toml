@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139.0",
     "fastembed>=0.8.0",
-    "fastmcp>=3.4.2",
+    "fastmcp==4.0.0b1",
     "numpy>=2.1.0",
     "openai>=2.44.0",
     "python-dotenv>=1.2.2",
@@ -88,4 +88,5 @@ exclude = [".venv", "venv", "build", "dist", ".factory"]
 respect-type-ignore-comments = true
 
 [tool.uv]
-exclude-newer = "30 days"
+exclude-newer = "7 days"
+constraint-dependencies = ["fastmcp-slim==4.0.0b1"]
