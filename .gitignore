@@ -32,3 +32,4 @@ venv/
 
 # Factory/droid tooling
 .factory/
+!.factory/mcp.json

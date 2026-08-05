@@ -85,29 +85,58 @@ def _register_routes(app: FastAPI) -> None:
         agent: str | None = Query(default=None),
         entity: str | None = Query(default=None),
     ) -> dict[str, Any]:
-        """Search sessions by text, vector, or hybrid mode with optional filters."""
+        """Search sessions by text, vector, or hybrid mode with optional filters.
+
+        Returns results immediately without waiting for AI summary generation.
+        Use ``POST /api/search/summary`` to fetch the AI summary separately.
+        """
         store = request.app.state.store
         embedder = request.app.state.embedder
-        results = _run_search(store, embedder, q, mode, limit)
-        results = _filter_results(store, results, agent=agent, entity=entity)
-        entities = store.list_entities([r["session_id"] for r in results])
+        raw_results = _run_search(store, embedder, q, mode, limit)
+        raw_results = _filter_results(store, raw_results, agent=agent, entity=entity)
+        grouped = _group_by_session(raw_results)
+        entities = store.list_entities([r["session_id"] for r in grouped])
         payloads = [
-            _payload(r, _normalize_entities(entities.get(r["session_id"], []))) for r in results
+            _payload(r, _normalize_entities(entities.get(r["session_id"], []))) for r in grouped
         ]
-        ai_summary = ""
-        enricher = request.app.state.enricher
-        if enricher is not None and payloads:
-            try:
-                ai_summary = enricher.summarize_search(q, payloads)
-            except Exception:
-                logger.warning("Search summary generation failed", exc_info=True)
-        return {"results": payloads, "ai_summary": ai_summary}
+        return {"results": payloads}
+
+    _register_summary_route(app)
 
     @app.get("/api/entities")
     def get_entities(request: Request, session_id: str) -> dict[str, Any]:
         """Return the enriched entities recorded for *session_id*."""
         session_entities = request.app.state.store.get_entities(session_id)
         return {"entities": session_entities}
+
+
+def _register_summary_route(app: FastAPI) -> None:
+    """Register the POST /api/search/summary endpoint."""
+
+    @app.post("/api/search/summary")
+    def search_summary(
+        request: Request,
+        body: dict[str, Any],
+    ) -> dict[str, str]:
+        """Generate an AI summary of search results for a given query.
+
+        Accepts a JSON body with ``query`` and ``results`` (the search payloads)
+        and returns ``{"summary": "..."}``. Returns an empty summary if no
+        enricher is configured or the API call fails.
+        """
+        enricher = request.app.state.enricher
+        if enricher is None:
+            return {"summary": ""}
+        query = body.get("query", "")
+        results = body.get("results", [])
+        if not results:
+            return {"summary": ""}
+        try:
+            summary = enricher.summarize_search(query, results)
+        except Exception:
+            logger.warning("Search summary generation failed", exc_info=True)
+            summary = ""
+        return {"summary": summary}
 
 
 def _run_search(
@@ -157,6 +186,35 @@ def _has_entity(store: Store, session_id: str, entity: str) -> bool:
     return any(entry.get("entity_value") == entity for entry in store.get_entities(session_id))
 
 
+def _group_by_session(results: list[SearchResult]) -> list[SearchResult]:
+    """Merge results that share a session_id, collecting all message snippets.
+
+    The store returns one row per matching message, so the same session can
+    appear multiple times.  This groups them, keeping the best score and
+    collecting all non-empty snippets into ``message_snippets``.
+    """
+    best: dict[str, SearchResult] = {}
+    snippets: dict[str, list[str]] = {}
+    for result in results:
+        sid = result["session_id"]
+        snippet = result.get("snippet", "")
+        if snippet:
+            snippets.setdefault(sid, []).append(snippet)
+        if sid not in best:
+            best[sid] = result
+        else:
+            score = result.get("score", result.get("rank", result.get("distance")))
+            prev = best[sid]
+            prev_score = prev.get("score", prev.get("rank", prev.get("distance")))
+            if (
+                isinstance(score, (int, float))
+                and isinstance(prev_score, (int, float))
+                and score > prev_score
+            ):
+                best[sid] = result
+    return [{**r, "message_snippets": snippets.get(r["session_id"], [])} for r in best.values()]
+
+
 def _normalize_entities(entities: list[dict]) -> list[dict]:
     """Convert store entity rows to the frontend ``type``/``value`` shape."""
     return [{"type": e["entity_type"], "value": e["entity_value"]} for e in entities]
@@ -172,5 +230,6 @@ def _payload(result: SearchResult, entities: list[dict]) -> SearchResult:
         "summary": result.get("summary"),
         "entities": entities,
         "snippet": result.get("snippet", ""),
+        "message_snippets": result.get("message_snippets", []),
         "score": result.get("score", result.get("rank", result.get("distance"))),
     }

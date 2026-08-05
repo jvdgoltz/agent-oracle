@@ -1,0 +1,3 @@
+# Agent Oracle MCP server – exposes archived coding agent session search.
+[mcp_servers.agent-oracle]
+url = "http://localhost:8000/mcp/"

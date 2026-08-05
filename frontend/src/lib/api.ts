@@ -60,6 +60,7 @@ export interface SearchResult {
 	summary: string | null;
 	entities: Entity[];
 	snippet: string;
+	message_snippets: string[];
 	score: number;
 }
 
@@ -112,7 +113,25 @@ export function getSession(id: string): Promise<SessionDetail> {
 /** Response shape from `GET /api/search`. */
 export interface SearchResponse {
 	results: SearchResult[];
-	ai_summary: string;
+}
+
+/**
+ * Fetch an AI-generated summary of search results for a query.
+ * @param query - The original search query.
+ * @param results - The search results to summarize.
+ * @returns The AI summary text, or empty string if unavailable.
+ */
+export async function fetchSearchSummary(query: string, results: SearchResult[]): Promise<string> {
+	const response = await fetch(`${API_BASE_URL}/api/search/summary`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ query, results })
+	});
+	if (!response.ok) {
+		throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+	}
+	const data = (await response.json()) as { summary: string };
+	return data.summary;
 }
 
 /**

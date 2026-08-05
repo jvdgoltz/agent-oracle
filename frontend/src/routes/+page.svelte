@@ -4,6 +4,7 @@
 	import {
 		getSessions,
 		search,
+		fetchSearchSummary,
 		type SearchMode,
 		type SearchResult,
 		type SessionSummary
@@ -37,6 +38,7 @@
 	let searching = $state(false);
 	let results: SearchResult[] = $state([]);
 	let aiSummary = $state('');
+	let summaryLoading = $state(false);
 	let error = $state<string | null>(null);
 
 	/**
@@ -60,20 +62,37 @@
 
 	/**
 	 * Trigger a search across sessions using the current query and mode.
+	 * Results are shown immediately; the AI summary is fetched separately.
 	 */
 	async function runSearch() {
 		if (!query.trim()) {
 			searching = false;
 			results = [];
 			aiSummary = '';
+			summaryLoading = false;
 			return;
 		}
 		searching = true;
 		error = null;
+		aiSummary = '';
+		summaryLoading = false;
 		try {
 			const data = await search(query.trim(), mode, 20, agent || undefined);
 			results = data.results;
-			aiSummary = data.ai_summary ?? '';
+			// Fetch AI summary separately so results render immediately.
+			if (results.length > 0) {
+				summaryLoading = true;
+				fetchSearchSummary(query.trim(), results)
+					.then((summary) => {
+						aiSummary = summary;
+					})
+					.catch(() => {
+						aiSummary = '';
+					})
+					.finally(() => {
+						summaryLoading = false;
+					});
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Search failed';
 			results = [];
@@ -181,7 +200,15 @@
 				<p class="empty-sub">Try a different query or switch to a different search mode.</p>
 			</div>
 		{:else}
-			{#if aiSummary}
+			{#if summaryLoading}
+				<div class="ai-summary ai-summary-loading">
+					<div class="ai-summary-icon">✦</div>
+					<div class="ai-summary-placeholder">
+						<span class="shimmer-line"></span>
+						<span class="shimmer-line short"></span>
+					</div>
+				</div>
+			{:else if aiSummary}
 				<div class="ai-summary">
 					<div class="ai-summary-icon">✦</div>
 					<p class="ai-summary-text">{aiSummary}</p>
@@ -206,7 +233,15 @@
 							{#if result.summary}
 								<p class="card-summary">{result.summary}</p>
 							{/if}
-							<p class="snippet">{result.snippet}</p>
+							{#if result.message_snippets.length > 0}
+								<ul class="msg-snippets">
+									{#each result.message_snippets as snip (snip)}
+										<li class="msg-snippet">{snip}</li>
+									{/each}
+								</ul>
+							{:else if result.snippet}
+								<p class="snippet">{result.snippet}</p>
+							{/if}
 							{#if result.entities.length > 0}
 								<div class="entities">
 									{#each result.entities as entity (entity.type + entity.value)}
@@ -556,6 +591,43 @@
 		color: var(--text);
 	}
 
+	.ai-summary-loading {
+		border-color: var(--border);
+	}
+
+	.ai-summary-placeholder {
+		display: flex;
+		flex-direction: column;
+		gap: var(--s2);
+		flex: 1;
+	}
+
+	.shimmer-line {
+		height: 12px;
+		border-radius: var(--r1);
+		background: linear-gradient(
+			90deg,
+			var(--border) 0%,
+			var(--border-strong) 50%,
+			var(--border) 100%
+		);
+		background-size: 200% 100%;
+		animation: shimmer 1.5s infinite;
+	}
+
+	.shimmer-line.short {
+		width: 60%;
+	}
+
+	@keyframes shimmer {
+		0% {
+			background-position: 200% 0;
+		}
+		100% {
+			background-position: -200% 0;
+		}
+	}
+
 	.score-badge {
 		margin-left: auto;
 		font-size: 11px;
@@ -576,6 +648,28 @@
 		line-clamp: 3;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
+	}
+
+	.msg-snippets {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--s1);
+	}
+
+	.msg-snippet {
+		font-size: 12px;
+		color: var(--muted);
+		padding-left: var(--s3);
+		border-left: 2px solid var(--border);
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+		line-height: 1.4;
 	}
 
 	/* ── Empty state ─────────────────────────────────────────────── */

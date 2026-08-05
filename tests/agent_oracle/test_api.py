@@ -9,11 +9,15 @@ from fastapi.testclient import TestClient
 from agent_oracle.api import create_app
 
 
-def _client(store: MagicMock | None = None, embedder: MagicMock | None = None):
+def _client(
+    store: MagicMock | None = None,
+    embedder: MagicMock | None = None,
+    enricher: MagicMock | None = None,
+):
     """Return a TestClient plus the injected store and embedder mocks."""
     store = store or MagicMock()
     embedder = embedder or MagicMock()
-    app = create_app(store, embedder)
+    app = create_app(store, embedder, enricher)
     return TestClient(app), store, embedder
 
 
@@ -135,11 +139,33 @@ def test_search_text_mode_does_not_embed() -> None:
             "summary": None,
             "entities": [],
             "snippet": "fix [the] bug",
+            "message_snippets": ["fix [the] bug"],
             "score": -1.0,
         }
     ]
     store.search_text.assert_called_once_with("bug", limit=20)
     embedder.embed_query.assert_not_called()
+
+
+def test_search_groups_multiple_messages_same_session() -> None:
+    """Multiple message hits for the same session are merged into one result."""
+    store = MagicMock()
+    embedder = MagicMock()
+    store.search_text.return_value = [
+        {"session_id": "s1", "snippet": "first match", "rank": -1.0},
+        {"session_id": "s1", "snippet": "second match", "rank": -2.0},
+        {"session_id": "s2", "snippet": "other session", "rank": -3.0},
+    ]
+    store.list_entities.return_value = {}
+    client, store, embedder = _client(store=store, embedder=embedder)
+    resp = client.get("/api/search?q=bug&mode=text")
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 2
+    assert results[0]["session_id"] == "s1"
+    assert results[0]["message_snippets"] == ["first match", "second match"]
+    assert results[1]["session_id"] == "s2"
+    assert results[1]["message_snippets"] == ["other session"]
 
 
 def test_search_hybrid_embeds_query() -> None:
@@ -163,6 +189,7 @@ def test_search_hybrid_embeds_query() -> None:
             "summary": None,
             "entities": [{"type": "product", "value": "SQLite"}],
             "snippet": "",
+            "message_snippets": [],
             "score": 0.9,
         }
     ]
@@ -189,6 +216,7 @@ def test_search_vector_embeds_query() -> None:
             "summary": None,
             "entities": [],
             "snippet": "",
+            "message_snippets": [],
             "score": 0.2,
         }
     ]
@@ -228,3 +256,38 @@ def test_search_filters_by_entity() -> None:
     resp = client.get("/api/search?q=bug&mode=text&entity=SQLite")
     assert resp.status_code == 200
     assert [r["session_id"] for r in resp.json()["results"]] == ["s1"]
+
+
+def test_search_summary_returns_ai_summary() -> None:
+    """The summary endpoint calls the enricher and returns its text."""
+    enricher = MagicMock()
+    enricher.summarize_search.return_value = "These sessions cover SQLite usage."
+    client, _store, _embedder = _client(enricher=enricher)
+    resp = client.post(
+        "/api/search/summary",
+        json={"query": "sqlite", "results": [{"snippet": "a", "summary": "b"}]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"summary": "These sessions cover SQLite usage."}
+    enricher.summarize_search.assert_called_once_with("sqlite", [{"snippet": "a", "summary": "b"}])
+
+
+def test_search_summary_without_enricher_returns_empty() -> None:
+    """When no enricher is configured, the summary endpoint returns empty."""
+    client, _store, _embedder = _client()
+    resp = client.post(
+        "/api/search/summary",
+        json={"query": "sqlite", "results": [{"snippet": "a"}]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"summary": ""}
+
+
+def test_search_summary_with_no_results_returns_empty() -> None:
+    """When no results are provided, the summary endpoint returns empty."""
+    enricher = MagicMock()
+    client, _store, _embedder = _client(enricher=enricher)
+    resp = client.post("/api/search/summary", json={"query": "x", "results": []})
+    assert resp.status_code == 200
+    assert resp.json() == {"summary": ""}
+    enricher.summarize_search.assert_not_called()

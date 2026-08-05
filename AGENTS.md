@@ -16,6 +16,11 @@ LLM-enriched entities and summaries. The backend also serves coding agents via R
 - Tests: `uv run pytest`
 - Full quality gate: `uvx pre-commit run --all-files`
 
+### Backend verification
+Whenever making changes to the backend, test the affected endpoints by calling
+them (e.g. via `curl http://localhost:8000/api/...`) and the MCP endpoints.
+Do not rely on unit tests alone to verify backend behavior.
+
 ## Coding Style
 - Simple functions, proper abstraction. Keep functions short. Code should be self-explanatory. Repository folder structure should be self-explanatory.
 - Every line of code should have intent, and the intent should come from the user instructions.

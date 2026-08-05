@@ -1,6 +1,6 @@
 """Main entry point for Agent Oracle.
 
-Wires together the store, embedder, enricher, watcher, and FastAPI app.
+Wires together the store, embedder, enricher, watcher, FastAPI app, and MCP server.
 Run with: ``uv run uvicorn agent_oracle.main:app --reload``
 Or directly: ``uv run python -m agent_oracle.main``
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -18,6 +19,7 @@ from fastapi import FastAPI
 from agent_oracle.api import create_app
 from agent_oracle.embed import Embedder
 from agent_oracle.enrich import Enricher
+from agent_oracle.mcp_server import create_mcp_server
 from agent_oracle.store import Store
 from agent_oracle.watcher import SessionWatcher
 
@@ -62,7 +64,23 @@ def _start_background_indexing(watcher: SessionWatcher) -> None:
 
 #: Lazy-initialised global app instance for uvicorn import.
 _components = _create_components()
-app: FastAPI = create_app(_components[0], _components[1], enricher=_components[2])
+_store, _embedder, _enricher, _watcher = _components
+
+#: MCP server mounted under /mcp on the FastAPI app.
+_mcp = create_mcp_server(_store, _embedder)
+_mcp_app = _mcp.http_app(path="/")
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Enter the MCP session lifespan on startup, clean up on shutdown."""
+    async with _mcp_app.lifespan(app):
+        yield
+
+
+app: FastAPI = create_app(_store, _embedder, enricher=_enricher)
+app.router.lifespan_context = _lifespan
+app.mount("/mcp", _mcp_app)
 
 #: The watcher is started once on import so live changes are tracked.
 _watcher_instance: SessionWatcher | None = None
