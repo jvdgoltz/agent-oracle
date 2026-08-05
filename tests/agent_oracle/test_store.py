@@ -247,9 +247,13 @@ def test_search_text_returns_matching_sessions(store: Store) -> None:
         )
     )
 
+    s1 = store.get_session("s1")
+    assert s1 is not None
+
     results = store.search_text("hello", limit=10)
     assert len(results) == 1
     assert results[0]["session_id"] == "s1"
+    assert results[0]["message_id"] == s1["messages"][0]["id"]
     assert "hello" in results[0]["snippet"]
     assert isinstance(results[0]["rank"], float)
 
@@ -291,6 +295,7 @@ def test_search_vector_returns_nearest(store: Store) -> None:
     results = store.search_vector(_make_embedding(1.0, index=0), limit=5)
     assert len(results) == 2
     assert results[0]["session_id"] == "s1"
+    assert results[0]["message_id"] == s1["messages"][0]["id"]
     assert results[0]["distance"] == pytest.approx(0.0, abs=1e-5)
 
 
@@ -358,6 +363,41 @@ def test_search_hybrid_finds_both_sources(store: Store) -> None:
     session_ids = {r["session_id"] for r in results}
     assert "text-only" in session_ids
     assert "vec-only" in session_ids
+
+
+def test_search_hybrid_returns_message_level_results(store: Store) -> None:
+    """Hybrid search returns one ranked row per matching message, not per session."""
+    messages = [
+        _make_message("python packaging tips"),
+        _make_message("python debugging tricks"),
+    ]
+    store.index_session(_make_session(session_id="s1", messages=messages))
+
+    results = store.search_hybrid("python", _make_embedding(1.0, index=0), limit=10)
+    s1_rows = [r for r in results if r["session_id"] == "s1"]
+    s1 = store.get_session("s1")
+    assert s1 is not None
+    assert len(s1_rows) == 2
+    assert {r["message_id"] for r in s1_rows} == {m["id"] for m in s1["messages"]}
+    assert all(r["snippet"] and isinstance(r["score"], float) for r in s1_rows)
+
+
+def test_search_hybrid_ranks_dual_source_messages_highest(store: Store) -> None:
+    """A message found by both text and vector search outranks single-source hits."""
+    store.index_session(
+        _make_session(session_id="both", messages=[_make_message("hybrid fusion target")])
+    )
+    store.index_session(
+        _make_session(session_id="text-only", messages=[_make_message("hybrid extra text hit")])
+    )
+
+    both = store.get_session("both")
+    assert both is not None
+    both_msg_id = both["messages"][0]["id"]
+    store.upsert_embedding(both_msg_id, _make_embedding(1.0, index=0))
+
+    results = store.search_hybrid("hybrid", _make_embedding(1.0, index=0), limit=10)
+    assert results[0]["message_id"] == both_msg_id
 
 
 # --------------------------------------------------------------------------- #

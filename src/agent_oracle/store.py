@@ -283,6 +283,7 @@ class Store:
         message_rows = self.conn.execute(
             """
             SELECT m.session_id        AS session_id,
+                   m.id                AS message_id,
                    s.agent             AS agent,
                    s.cwd               AS cwd,
                    s.started_at        AS started_at,
@@ -301,6 +302,7 @@ class Store:
         summary_rows = self.conn.execute(
             """
             SELECT s.id                              AS session_id,
+                   NULL                              AS message_id,
                    s.agent                           AS agent,
                    s.cwd                             AS cwd,
                    s.started_at                      AS started_at,
@@ -327,6 +329,7 @@ class Store:
         message_rows = self.conn.execute(
             """
             SELECT m.session_id AS session_id,
+                   m.id         AS message_id,
                    s.agent      AS agent,
                    s.cwd        AS cwd,
                    s.started_at AS started_at,
@@ -343,6 +346,7 @@ class Store:
         summary_rows = self.conn.execute(
             """
             SELECT s.id        AS session_id,
+                   NULL        AS message_id,
                    s.agent     AS agent,
                    s.cwd       AS cwd,
                    s.started_at AS started_at,
@@ -364,46 +368,42 @@ class Store:
     def search_hybrid(
         self, query: str, query_embedding: list[float], limit: int = 20
     ) -> list[dict]:
-        """Reciprocal rank fusion of text and vector search results."""
-        text_results = self._dedupe_by_session(self.search_text(query, limit=limit))
-        vec_results = self._dedupe_by_session(self.search_vector(query_embedding, limit=limit))
-        # Accumulate RRF scores and preserve session metadata from whichever list
-        # first saw each session.
-        scores: dict[str, float] = {}
-        meta: dict[str, dict] = {}
-        for rank, result in enumerate(text_results):
-            sid = result["session_id"]
-            scores[sid] = scores.get(sid, 0.0) + 1.0 / (_RRF_K + rank + 1)
-            meta.setdefault(sid, result)
-        for rank, result in enumerate(vec_results):
-            sid = result["session_id"]
-            scores[sid] = scores.get(sid, 0.0) + 1.0 / (_RRF_K + rank + 1)
-            meta.setdefault(sid, result)
+        """Reciprocal rank fusion of text and vector results at message level.
+
+        Each candidate is keyed by its ``message_id`` (or the session for
+        summary rows), so different messages of the same session are ranked
+        independently and both surface in the results.  Text results carry a
+        matched snippet; vector-only hits contribute score but no snippet.
+        """
+        text_results = self.search_text(query, limit=limit)
+        vec_results = self.search_vector(query_embedding, limit=limit)
+        # Accumulate RRF scores per candidate and keep the row with a snippet
+        # when the same message appears in both lists.
+        scores: dict[tuple[str, object], float] = {}
+        meta: dict[tuple[str, object], dict] = {}
+        for results in (text_results, vec_results):
+            for rank, result in enumerate(results):
+                message_id = result.get("message_id")
+                key = (
+                    ("msg", message_id) if message_id is not None else ("sum", result["session_id"])
+                )
+                scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + rank + 1)
+                if key not in meta or (result.get("snippet") and not meta[key].get("snippet")):
+                    meta[key] = result
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
         return [
             {
-                "session_id": sid,
-                "agent": meta[sid].get("agent"),
-                "cwd": meta[sid].get("cwd"),
-                "started_at": meta[sid].get("started_at"),
-                "summary": meta[sid].get("summary"),
-                "snippet": meta[sid].get("snippet", ""),
+                "session_id": meta[key]["session_id"],
+                "message_id": meta[key].get("message_id"),
+                "agent": meta[key].get("agent"),
+                "cwd": meta[key].get("cwd"),
+                "started_at": meta[key].get("started_at"),
+                "summary": meta[key].get("summary"),
+                "snippet": meta[key].get("snippet", ""),
                 "score": score,
             }
-            for sid, score in ranked
+            for key, score in ranked
         ]
-
-    @staticmethod
-    def _dedupe_by_session(results: list[dict]) -> list[dict]:
-        """Keep only the first (best) result per session_id."""
-        seen: set[str] = set()
-        deduped: list[dict] = []
-        for r in results:
-            sid = r["session_id"]
-            if sid not in seen:
-                seen.add(sid)
-                deduped.append(r)
-        return deduped
 
     # ------------------------------------------------------------------ #
     # Retrieval
