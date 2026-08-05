@@ -93,15 +93,20 @@ class SessionWatcher:
         logger.info("Stopped watching session directories")
 
     def index_existing(self) -> None:
-        """Bulk-import all existing session files across the watched directories."""
+        """Bulk-import all existing session files, skipping already-enriched ones."""
         for directory in _watched_dirs().values():
             if not directory.exists():
                 continue
             for path in sorted(directory.rglob("*.jsonl")):
-                self._index_file(path)
+                self._index_file(path, skip_if_enriched=True)
 
-    def _index_file(self, path: Path) -> None:
-        """Parse, store, embed, and enrich a single session file."""
+    def _index_file(self, path: Path, skip_if_enriched: bool = False) -> None:
+        """Parse, store, embed, and enrich a single session file.
+
+        When *skip_if_enriched* is True (used during bulk re-index on startup),
+        files whose session is already fully enriched are skipped to avoid
+        redundant re-processing after restarts.
+        """
         if path.suffix != ".jsonl":
             return
         parser = self._detect_parser(path)
@@ -110,6 +115,9 @@ class SessionWatcher:
             return
         try:
             session = parser(path)
+            if skip_if_enriched and self.store.is_session_indexed(session.id):
+                logger.debug("Skipping already-enriched session %s", session.id)
+                return
             self.store.index_session(session)
             self._embed_messages(session)
             self._enrich_session(session)

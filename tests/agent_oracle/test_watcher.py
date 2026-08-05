@@ -265,6 +265,7 @@ def test_index_existing_discovers_all_three_dirs(tmp_path: Path) -> None:
 
     watcher, store, _embedder, enricher = _make_watcher()
     store.get_session.return_value = {"messages": []}
+    store.is_session_indexed.return_value = False
     enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
 
     with patch.object(watcher_module, "_HOME", tmp_path):

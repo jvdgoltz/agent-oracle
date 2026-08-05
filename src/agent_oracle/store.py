@@ -395,6 +395,13 @@ class Store:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def is_session_indexed(self, session_id: str) -> bool:
+        """Return True if *session_id* exists and has been enriched."""
+        row = self.conn.execute(
+            "SELECT enriched FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return row is not None and bool(row["enriched"])
+
     def get_session(self, session_id: str) -> dict | None:
         """Return the session and all its messages, or None if not found."""
         row = self.conn.execute(
