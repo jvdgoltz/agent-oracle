@@ -12,9 +12,16 @@ const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8
 
 /** A single message within a session. */
 export interface Message {
+	id: number;
+	session_id: string;
 	role: string;
 	content: string;
 	timestamp: string;
+	seq: number;
+	is_thinking: number;
+	model: string | null;
+	is_system_instruction: number;
+	is_injected: number;
 }
 
 /** An extracted entity (e.g. a package, file, or command) from a session. */
@@ -30,6 +37,7 @@ export interface SessionSummary {
 	cwd: string;
 	started_at: string;
 	summary: string;
+	entities: Entity[];
 }
 
 /** Full session detail including messages and entities. */
@@ -46,6 +54,11 @@ export interface SessionDetail {
 /** A single search hit across sessions. */
 export interface SearchResult {
 	session_id: string;
+	agent: string | null;
+	cwd: string | null;
+	started_at: string | null;
+	summary: string | null;
+	entities: Entity[];
 	snippet: string;
 	score: number;
 }

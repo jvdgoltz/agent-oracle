@@ -14,7 +14,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, Session
+from agent_oracle.models import AgentType, Message, MessageRole, Session
 from agent_oracle.sources.common import MESSAGE_ROLES, parse_timestamp
 
 
@@ -62,10 +62,19 @@ def _extract_message(record: dict, timestamp: datetime) -> Message | None:
     if role is None:
         return None
     content_parts = msg_data.get("content", [])
+
+    is_thinking = any(isinstance(p, dict) and p.get("type") == "thinking" for p in content_parts)
+    is_injected = msg_data.get("visibility") == "llm_only"
+    is_system = role is MessageRole.SYSTEM
+
     text = "".join(part.get("text", "") for part in content_parts if isinstance(part, dict))
+
     return Message(
         role=role,
         content=text,
         timestamp=timestamp,
         message_id=record.get("id"),
+        is_thinking=is_thinking,
+        is_system_instruction=is_system,
+        is_injected=is_injected,
     )

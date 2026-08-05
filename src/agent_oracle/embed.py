@@ -7,13 +7,23 @@ embedding passages, batches, and search queries.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Iterator
+from typing import Protocol, cast
 
+import numpy as np
 from fastembed import TextEmbedding
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+
+
+class _ModelProtocol(Protocol):
+    """Minimal protocol for the FastEmbed model interface."""
+
+    def embed(self, texts: list[str], **_kwargs: object) -> Iterator[np.ndarray]: ...
+
+    def query_embed(self, queries: list[str], **_kwargs: object) -> Iterator[np.ndarray]: ...
 
 
 class Embedder:
@@ -23,7 +33,7 @@ class Embedder:
         self,
         model_name: str = DEFAULT_MODEL,
         *,
-        _model: Any = None,
+        _model: _ModelProtocol | None = None,
     ) -> None:
         """Configure the embedder without loading the model yet.
 
@@ -31,13 +41,13 @@ class Embedder:
         Tests can inject a *_model* to avoid downloading weights.
         """
         self.model_name = model_name
-        self._model: Any = _model
+        self._model: _ModelProtocol | None = _model
 
     @property
-    def model(self) -> Any:
+    def model(self) -> _ModelProtocol:
         """Return the backing model, loading it on first access."""
         if self._model is None:
-            self._model = TextEmbedding(model_name=self.model_name)
+            self._model = cast("_ModelProtocol", TextEmbedding(model_name=self.model_name))
             logger.info("Loaded FastEmbed model %s", self.model_name)
         return self._model
 
@@ -50,11 +60,10 @@ class Embedder:
         """Embed multiple strings in one pass and return their vectors."""
         if not texts:
             return []
-        vectors = self.model.embed(texts)
-        return [v.tolist() for v in vectors]
+        return [vector.tolist() for vector in self.model.embed(texts)]
 
     def embed_query(self, query: str) -> list[float]:
-        """Embed a search query using FastEmbed query_embed method."""
+        """Embed a search query using FastEmbed's query_embed method."""
         vector = next(iter(self.model.query_embed([query])))
         return vector.tolist()
 

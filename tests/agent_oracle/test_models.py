@@ -34,3 +34,41 @@ def test_session_creation() -> None:
 def test_agent_type_values() -> None:
     """AgentType has exactly the three supported agents."""
     assert {AgentType.CODEX, AgentType.FACTORY, AgentType.CLAUDE}
+
+
+def test_message_metadata_defaults() -> None:
+    """A plain message has no thinking, system, or injected flags."""
+    ts = datetime.now(UTC)
+    msg = Message(role=MessageRole.USER, content="hello", timestamp=ts)
+    assert msg.is_thinking is False
+    assert msg.model is None
+    assert msg.is_system_instruction is False
+    assert msg.is_injected is False
+    assert msg.is_searchable is True
+
+
+def test_thinking_message_not_searchable() -> None:
+    """A thinking message is excluded from search."""
+    ts = datetime.now(UTC)
+    msg = Message(
+        role=MessageRole.ASSISTANT, content="reasoning...", timestamp=ts, is_thinking=True
+    )
+    assert msg.is_searchable is False
+
+
+def test_system_instruction_not_searchable() -> None:
+    """A system instruction message is excluded from search."""
+    ts = datetime.now(UTC)
+    msg = Message(
+        role=MessageRole.DEVELOPER, content="You are...", timestamp=ts, is_system_instruction=True
+    )
+    assert msg.is_searchable is False
+
+
+def test_injected_message_not_searchable() -> None:
+    """An injected (non-user-authored) message is excluded from search."""
+    ts = datetime.now(UTC)
+    msg = Message(
+        role=MessageRole.USER, content="<system-reminder>...", timestamp=ts, is_injected=True
+    )
+    assert msg.is_searchable is False

@@ -16,7 +16,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, Session
+from agent_oracle.models import AgentType, Message, MessageRole, Session
 from agent_oracle.sources.common import MESSAGE_ROLES, parse_timestamp
 
 _MESSAGE_TYPES = {"user", "assistant"}
@@ -64,13 +64,30 @@ def _extract_message(record: dict, timestamp: datetime) -> Message | None:
     role = MESSAGE_ROLES.get(role_str)
     if role is None:
         return None
-    text = _extract_content_text(msg_data.get("content"))
+    content = msg_data.get("content")
+    text = _extract_content_text(content)
+    is_thinking = _has_thinking_content(content)
+    model = msg_data.get("model")
+    is_system = role is MessageRole.SYSTEM
+    is_injected = bool(record.get("isMeta"))
+
     return Message(
         role=role,
         content=text,
         timestamp=timestamp,
         message_id=record.get("uuid"),
+        is_thinking=is_thinking,
+        model=model,
+        is_system_instruction=is_system,
+        is_injected=is_injected,
     )
+
+
+def _has_thinking_content(content: object) -> bool:
+    """Return True when the content array contains a thinking part."""
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(p, dict) and p.get("type") == "thinking" for p in content)
 
 
 def _extract_content_text(content: object) -> str:

@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.139.0",
     "fastembed>=0.8.0",
     "fastmcp>=3.4.2",
+    "numpy>=2.1.0",
     "openai>=2.44.0",
     "python-dotenv>=1.2.2",
     "sqlite-vec>=0.1.9",
@@ -57,7 +58,7 @@ exclude = [".venv", "venv", "build", "dist", "frontend"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = [".venv", "venv", "build", "dist"]
+extend-exclude = [".venv", "venv", "build", "dist", ".factory"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "C90", "PLR0915", "TD", "FIX", "RUF", "TID252"]
@@ -81,7 +82,7 @@ error-on-warning = true
 
 [tool.ty.src]
 respect-ignore-files = true
-exclude = [".venv", "venv", "build", "dist"]
+exclude = [".venv", "venv", "build", "dist", ".factory"]
 
 [tool.ty.analysis]
 respect-type-ignore-comments = true

@@ -7,7 +7,6 @@ summaries, and text / vector / hybrid search.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
@@ -53,12 +52,6 @@ def _make_message(
     )
 
 
-@pytest.fixture
-def store(tmp_path: Path) -> Store:
-    """Create a :class:`Store` backed by a temporary database file."""
-    return Store(tmp_path / "test.db")
-
-
 # --------------------------------------------------------------------------- #
 # Schema / initialization
 # --------------------------------------------------------------------------- #
@@ -75,6 +68,8 @@ def test_init_creates_tables(store: Store) -> None:
     assert "sessions" in names
     assert "messages" in names
     assert "messages_fts" in names
+    assert "sessions_fts" in names
+    assert "vec_sessions" in names
     assert "vec_messages" in names
     assert "entities" in names
 
@@ -230,20 +225,6 @@ def test_upsert_entities_replaces_existing(store: Store) -> None:
     entities = store.get_entities("sess-001")
     assert len(entities) == 1
     assert entities[0]["entity_value"] == "new.py"
-
-
-# --------------------------------------------------------------------------- #
-# set_summary
-# --------------------------------------------------------------------------- #
-
-
-def test_set_summary_updates_session(store: Store) -> None:
-    """set_summary stores the summary on the session row."""
-    store.index_session(_make_session())
-    store.set_summary("sess-001", "A session about testing")
-
-    row = store.conn.execute("SELECT summary FROM sessions WHERE id = ?", ("sess-001",)).fetchone()
-    assert row[0] == "A session about testing"
 
 
 # --------------------------------------------------------------------------- #

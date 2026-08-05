@@ -58,7 +58,11 @@ def _register_routes(app: FastAPI) -> None:
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
         """Return the most recent sessions with pagination metadata."""
-        sessions = request.app.state.store.list_sessions(limit=limit, offset=offset)
+        store = request.app.state.store
+        sessions = store.list_sessions(limit=limit, offset=offset)
+        entities = store.list_entities([s["id"] for s in sessions])
+        for session in sessions:
+            session["entities"] = _normalize_entities(entities.get(session["id"], []))
         return {"sessions": sessions, "total": len(sessions)}
 
     @app.get("/api/sessions/{session_id}")
@@ -83,7 +87,12 @@ def _register_routes(app: FastAPI) -> None:
         embedder = request.app.state.embedder
         results = _run_search(store, embedder, q, mode, limit)
         results = _filter_results(store, results, agent=agent, entity=entity)
-        return {"results": [_payload(result) for result in results]}
+        entities = store.list_entities([r["session_id"] for r in results])
+        return {
+            "results": [
+                _payload(r, _normalize_entities(entities.get(r["session_id"], []))) for r in results
+            ]
+        }
 
     @app.get("/api/entities")
     def get_entities(request: Request, session_id: str) -> dict[str, Any]:
@@ -139,10 +148,20 @@ def _has_entity(store: Store, session_id: str, entity: str) -> bool:
     return any(entry.get("entity_value") == entity for entry in store.get_entities(session_id))
 
 
-def _payload(result: SearchResult) -> SearchResult:
+def _normalize_entities(entities: list[dict]) -> list[dict]:
+    """Convert store entity rows to the frontend ``type``/``value`` shape."""
+    return [{"type": e["entity_type"], "value": e["entity_value"]} for e in entities]
+
+
+def _payload(result: SearchResult, entities: list[dict]) -> SearchResult:
     """Normalize a store search result into the API response shape."""
     return {
         "session_id": result.get("session_id"),
+        "agent": result.get("agent"),
+        "cwd": result.get("cwd"),
+        "started_at": result.get("started_at"),
+        "summary": result.get("summary"),
+        "entities": entities,
         "snippet": result.get("snippet", ""),
         "score": result.get("score", result.get("rank", result.get("distance"))),
     }

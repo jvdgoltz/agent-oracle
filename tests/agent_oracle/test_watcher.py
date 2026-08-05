@@ -158,8 +158,10 @@ def test_index_file_routes_to_codex_normalizer(tmp_path: Path) -> None:
     session = store.index_session.call_args.args[0]
     assert isinstance(session, Session)
     assert session.agent == AgentType.CODEX
-    embedder.embed_batch.assert_called_once_with(["hi"])
+    embedder.embed_batch.assert_any_call(["hi"])
+    embedder.embed_batch.assert_any_call(["s"])
     store.upsert_embedding.assert_called_once_with(1, [0.1, 0.2])
+    store.upsert_session_embedding.assert_called_once_with("codex-sess", [0.1, 0.2])
     enricher.enrich.assert_called_once()
     store.set_summary.assert_called_once_with("codex-sess", "s")
     store.upsert_entities.assert_called_once_with(
@@ -215,6 +217,41 @@ def test_index_file_continues_on_failure(tmp_path: Path) -> None:
         watcher._index_file(bad)
 
     store.index_session.assert_not_called()
+
+
+def test_enrich_embeds_summary(tmp_path: Path) -> None:
+    """A non-empty enrichment summary is embedded into vec_sessions."""
+    codex_dir = tmp_path / ".codex" / "sessions"
+    codex_dir.mkdir(parents=True)
+    source = _codex_jsonl(codex_dir)
+    watcher, store, embedder, enricher = _make_watcher()
+    store.get_session.return_value = {"messages": []}
+    embedder.embed_batch.return_value = [[0.5, 0.6]]
+    enricher.enrich.return_value = EnrichmentResult(summary="refactoring work", entities=[])
+
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        watcher._index_file(source)
+
+    store.set_summary.assert_called_once_with("codex-sess", "refactoring work")
+    embedder.embed_batch.assert_called_once_with(["refactoring work"])
+    store.upsert_session_embedding.assert_called_once_with("codex-sess", [0.5, 0.6])
+
+
+def test_enrich_skips_summary_embedding_when_empty(tmp_path: Path) -> None:
+    """An empty enrichment summary is not embedded."""
+    codex_dir = tmp_path / ".codex" / "sessions"
+    codex_dir.mkdir(parents=True)
+    source = _codex_jsonl(codex_dir)
+    watcher, store, embedder, enricher = _make_watcher()
+    store.get_session.return_value = {"messages": []}
+    enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
+
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        watcher._index_file(source)
+
+    store.set_summary.assert_called_once_with("codex-sess", "")
+    embedder.embed_batch.assert_not_called()
+    store.upsert_session_embedding.assert_not_called()
 
 
 def test_index_existing_discovers_all_three_dirs(tmp_path: Path) -> None:

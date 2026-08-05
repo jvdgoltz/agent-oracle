@@ -6,14 +6,16 @@ to keep tests fast and hermetic.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import numpy as np
 
-from agent_oracle.embed import DEFAULT_MODEL, Embedder
+from agent_oracle.embed import DEFAULT_MODEL, Embedder, _ModelProtocol
 
 _DIM = 384
 
 
-class _FakeModel:
+class _FakeModel(_ModelProtocol):
     """A stand-in for ``TextEmbedding`` returning deterministic vectors."""
 
     def __init__(self, model_name: str | None = None, **_kwargs: object) -> None:
@@ -21,12 +23,12 @@ class _FakeModel:
         self.model_name = model_name
         self.calls = 0
 
-    def embed(self, documents: list[str], **_kwargs: object) -> object:
+    def embed(self, texts: list[str], **_kwargs: object) -> Iterator[np.ndarray]:
         """Return fake embeddings as a numpy array iterator."""
         self.calls += 1
-        yield from np.zeros((len(documents), _DIM), dtype=np.float32)
+        yield from np.zeros((len(texts), _DIM), dtype=np.float32)
 
-    def query_embed(self, queries: list[str], **_kwargs: object) -> object:
+    def query_embed(self, queries: list[str], **_kwargs: object) -> Iterator[np.ndarray]:
         """Return fake query embeddings as a numpy array iterator."""
         self.calls += 1
         yield from np.zeros((len(queries), _DIM), dtype=np.float32)

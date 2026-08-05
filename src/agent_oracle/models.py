@@ -31,12 +31,27 @@ class MessageRole(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    """A single message within a session."""
+    """A single message within a session.
+
+    The ``is_thinking``, ``is_system_instruction``, and ``is_injected`` flags
+    distinguish real conversation turns from internal reasoning and injected
+    context.  Messages with any of these flags set are visible in the session
+    detail view but excluded from the search index.
+    """
 
     role: MessageRole
     content: str
     timestamp: datetime
     message_id: str | None = None
+    is_thinking: bool = False
+    model: str | None = None
+    is_system_instruction: bool = False
+    is_injected: bool = False
+
+    @property
+    def is_searchable(self) -> bool:
+        """Return True when this message should appear in the search index."""
+        return not (self.is_thinking or self.is_system_instruction or self.is_injected)
 
 
 @dataclass(frozen=True, slots=True)

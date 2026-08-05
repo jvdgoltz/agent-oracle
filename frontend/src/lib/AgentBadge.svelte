@@ -7,29 +7,37 @@
 
 	let { agent }: Props = $props();
 
-	const colors: Record<string, string> = {
-		codex: '#7aa2f7',
-		factory: '#ffb86c',
-		claude: '#f7768e'
+	/** CSS custom property values keyed by agent name. */
+	const palette: Record<Agent, { color: string; bg: string }> = {
+		codex: { color: '#7aa2f7', bg: 'rgba(122, 162, 247, 0.12)' },
+		factory: { color: '#ffb86c', bg: 'rgba(255, 184, 108, 0.12)' },
+		claude: { color: '#e879a0', bg: 'rgba(232, 121, 160, 0.12)' }
 	};
 
+	const fallback = { color: '#6b6b80', bg: 'rgba(107, 107, 128, 0.10)' };
+
 	const normalized: Agent | null = $derived(knownAgent(agent));
+	const style = $derived(normalized ? palette[normalized] : fallback);
 </script>
 
-<!-- Agent badge with a distinct background per agent type. -->
-<span class="badge" style={`--badge-color: ${normalized ? colors[normalized] : '#9a9a9a'}`}
-	>{agent}</span
->
+<!-- Agent badge: colored pill with matching background tint. -->
+<span class="badge" style="--badge-color: {style.color}; --badge-bg: {style.bg}">
+	{agent}
+</span>
 
 <style>
 	.badge {
-		display: inline-block;
-		padding: 0.15em 0.6em;
+		display: inline-flex;
+		align-items: center;
+		padding: 2px 8px;
 		border-radius: 999px;
-		background-color: var(--badge-color);
-		color: #1a1a1a;
-		font-size: 0.75rem;
+		background-color: var(--badge-bg);
+		border: 1px solid color-mix(in srgb, var(--badge-color) 35%, transparent);
+		color: var(--badge-color);
+		font-size: 11px;
 		font-weight: 600;
+		letter-spacing: 0.02em;
 		white-space: nowrap;
+		text-transform: capitalize;
 	}
 </style>

@@ -44,7 +44,7 @@ class EnrichmentResult:
 class Enricher:
     """Extracts entities and a summary from a session via the OpenAI API."""
 
-    def __init__(self, model: str = "gpt-5.6", api_key: str | None = None) -> None:
+    def __init__(self, model: str = "gpt-5.6-luna", api_key: str | None = None) -> None:
         """Store config; the OpenAI client is created lazily on first use."""
         self.model = model
         self._api_key = api_key

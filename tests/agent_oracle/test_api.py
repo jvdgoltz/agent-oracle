@@ -47,13 +47,20 @@ def test_list_sessions_returns_paginated_results() -> None:
         },
     ]
     store.list_sessions.return_value = sessions
+    store.list_entities.return_value = {
+        "s2": [{"entity_type": "product", "entity_value": "SQLite"}]
+    }
     client, store, _embedder = _client(store=store)
     resp = client.get("/api/sessions?limit=10&offset=5")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["sessions"] == sessions
+    assert body["sessions"][0]["entities"] == [{"type": "product", "value": "SQLite"}]
+    assert body["sessions"][1]["entities"] == []
     assert body["total"] == 2
     store.list_sessions.assert_called_once_with(limit=10, offset=5)
+
+    for key in ("agent", "cwd", "summary"):
+        assert body["sessions"][0][key] == sessions[0][key]
 
 
 def test_get_session_returns_detail() -> None:
@@ -115,11 +122,21 @@ def test_search_text_mode_does_not_embed() -> None:
     store.search_text.return_value = [
         {"session_id": "s1", "snippet": "fix [the] bug", "rank": -1.0}
     ]
+    store.list_entities.return_value = {}
     client, store, embedder = _client(store=store, embedder=embedder)
     resp = client.get("/api/search?q=bug&mode=text")
     assert resp.status_code == 200
     assert resp.json()["results"] == [
-        {"session_id": "s1", "snippet": "fix [the] bug", "score": -1.0}
+        {
+            "session_id": "s1",
+            "agent": None,
+            "cwd": None,
+            "started_at": None,
+            "summary": None,
+            "entities": [],
+            "snippet": "fix [the] bug",
+            "score": -1.0,
+        }
     ]
     store.search_text.assert_called_once_with("bug", limit=20)
     embedder.embed_query.assert_not_called()
@@ -131,10 +148,24 @@ def test_search_hybrid_embeds_query() -> None:
     embedder = MagicMock()
     embedder.embed_query.return_value = [0.1, 0.2]
     store.search_hybrid.return_value = [{"session_id": "s1", "score": 0.9}]
+    store.list_entities.return_value = {
+        "s1": [{"entity_type": "product", "entity_value": "SQLite"}]
+    }
     client, store, embedder = _client(store=store, embedder=embedder)
     resp = client.get("/api/search?q=bug")
     assert resp.status_code == 200
-    assert resp.json()["results"] == [{"session_id": "s1", "snippet": "", "score": 0.9}]
+    assert resp.json()["results"] == [
+        {
+            "session_id": "s1",
+            "agent": None,
+            "cwd": None,
+            "started_at": None,
+            "summary": None,
+            "entities": [{"type": "product", "value": "SQLite"}],
+            "snippet": "",
+            "score": 0.9,
+        }
+    ]
     embedder.embed_query.assert_called_once_with("bug")
     store.search_hybrid.assert_called_once_with("bug", [0.1, 0.2], limit=20)
 
@@ -145,10 +176,22 @@ def test_search_vector_embeds_query() -> None:
     embedder = MagicMock()
     embedder.embed_query.return_value = [0.3, 0.4]
     store.search_vector.return_value = [{"session_id": "s2", "distance": 0.2}]
+    store.list_entities.return_value = {}
     client, store, embedder = _client(store=store, embedder=embedder)
     resp = client.get("/api/search?q=fix&mode=vector")
     assert resp.status_code == 200
-    assert resp.json()["results"] == [{"session_id": "s2", "snippet": "", "score": 0.2}]
+    assert resp.json()["results"] == [
+        {
+            "session_id": "s2",
+            "agent": None,
+            "cwd": None,
+            "started_at": None,
+            "summary": None,
+            "entities": [],
+            "snippet": "",
+            "score": 0.2,
+        }
+    ]
     embedder.embed_query.assert_called_once_with("fix")
     store.search_vector.assert_called_once_with([0.3, 0.4], limit=20)
 

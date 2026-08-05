@@ -47,9 +47,12 @@ def _start_background_indexing(watcher: SessionWatcher) -> None:
     """Run the initial bulk index in a daemon thread, then start live watching."""
 
     def _run() -> None:
-        """Index existing sessions, then start the file watcher."""
+        """Index existing sessions, backfill summary indexes, then start the watcher."""
         logger.info("Starting bulk index of existing sessions...")
         watcher.index_existing()
+        count = watcher.store.backfill_summary_indexes(watcher.embedder.embed_batch)
+        if count:
+            logger.info("Backfilled %d summary index entries", count)
         logger.info("Bulk index complete. Starting file watcher...")
         watcher.start()
 

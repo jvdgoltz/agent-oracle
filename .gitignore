@@ -29,3 +29,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# Factory/droid tooling
+.factory/

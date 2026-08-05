@@ -118,17 +118,22 @@ class SessionWatcher:
             logger.error("Failed to index session file %s", path, exc_info=True)
 
     def _embed_messages(self, session: Session) -> None:
-        """Batch-embed all messages in a session and store the vectors."""
+        """Batch-embed searchable messages in a session and store the vectors."""
         indexed = self.store.get_session(session.id)
         if indexed is None:
             logger.warning("No stored messages for session %s; skipping embeddings", session.id)
             return
-        messages = indexed["messages"]
-        if not messages:
+        all_messages = indexed["messages"]
+        searchable = [
+            m
+            for m in all_messages
+            if not (m.get("is_thinking") or m.get("is_system_instruction") or m.get("is_injected"))
+        ]
+        if not searchable:
             return
-        texts = [msg["content"] for msg in messages]
+        texts = [msg["content"] for msg in searchable]
         embeddings = self.embedder.embed_batch(texts)
-        for msg, embedding in zip(messages, embeddings, strict=True):
+        for msg, embedding in zip(searchable, embeddings, strict=True):
             self.store.upsert_embedding(msg["id"], embedding)
 
     def _enrich_session(self, session: Session) -> None:
@@ -139,6 +144,9 @@ class SessionWatcher:
             logger.warning("Skipping enrichment for %s: %s", session.id, exc)
             return
         self.store.set_summary(session.id, result.summary)
+        if result.summary:
+            embedding = self.embedder.embed_batch([result.summary])[0]
+            self.store.upsert_session_embedding(session.id, embedding)
         entities = [{"type": entity.type, "value": entity.value} for entity in result.entities]
         self.store.upsert_entities(session.id, entities)
 
