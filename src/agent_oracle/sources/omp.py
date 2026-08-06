@@ -19,9 +19,6 @@ from pathlib import Path
 from agent_oracle.models import AgentType, Message, Session
 from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
 
-#: Roles that represent tool execution rather than conversation.
-_SKIP_ROLES = {"toolResult", "bashExecution"}
-
 
 def parse_omp_session(path: Path) -> Session:
     """Parse an OMP JSONL session file into a :class:`Session`."""
@@ -73,7 +70,7 @@ def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
     """
     msg_data = record.get("message", {})
     role = msg_data.get("role")
-    if role in _SKIP_ROLES or MESSAGE_ROLES.get(role) is None:
+    if MESSAGE_ROLES.get(role) is None:
         return []
 
     message_id = record.get("id")

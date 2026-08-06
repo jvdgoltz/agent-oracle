@@ -49,6 +49,9 @@ def parse_codex_session(path: Path) -> Session:
             if msg is not None:
                 messages.append(msg)
 
+    if started_at == datetime.fromtimestamp(0) and messages:
+        started_at = messages[0].timestamp
+
     return Session(
         id=session_id,
         agent=AgentType.CODEX,
@@ -75,6 +78,8 @@ def _extract_message(payload: dict, timestamp: datetime, model: str | None) -> M
     content_parts = payload.get("content", [])
     text = "".join(part.get("text", "") for part in content_parts if isinstance(part, dict))
 
+    # Model is only for assistant messages (including reasoning/thinking)
+    msg_model = model if role is MessageRole.ASSISTANT else None
     is_system = role is MessageRole.DEVELOPER
     is_injected = role is MessageRole.USER and text.startswith(_INJECTED_TAGS)
 
@@ -82,7 +87,7 @@ def _extract_message(payload: dict, timestamp: datetime, model: str | None) -> M
         role=role,
         content=text,
         timestamp=timestamp,
-        model=model,
+        model=msg_model,
         is_system_instruction=is_system,
         is_injected=is_injected,
     )

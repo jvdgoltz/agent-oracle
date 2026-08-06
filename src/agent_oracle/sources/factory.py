@@ -23,6 +23,7 @@ def parse_factory_session(path: Path) -> Session:
     cwd = ""
     started_at = datetime.fromtimestamp(0)
     messages: list[Message] = []
+    model = _read_factory_session_model(path)
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -33,11 +34,14 @@ def parse_factory_session(path: Path) -> Session:
         if record_type == "session_start":
             session_id = record.get("id", session_id)
             cwd = record.get("cwd", "")
+            ts = parse_timestamp(record.get("timestamp", ""))
+            if ts != datetime.fromtimestamp(0):
+                started_at = ts
         elif record_type == "message":
             timestamp = parse_timestamp(record.get("timestamp", ""))
-            extracted = _extract_messages(record, timestamp)
+            extracted = _extract_messages(record, timestamp, model)
             if extracted:
-                if not started_at or started_at == datetime.fromtimestamp(0):
+                if started_at == datetime.fromtimestamp(0):
                     started_at = timestamp
                 messages.extend(extracted)
 
@@ -53,14 +57,13 @@ def parse_factory_session(path: Path) -> Session:
     )
 
 
-def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
+def _extract_messages(record: dict, timestamp: datetime, model: str | None) -> list[Message]:
     """Build one :class:`Message` per logical part of a Factory message record.
 
-    Factory content arrays mix part types: ``text`` (concatenated into one
-    message) and ``thinking`` (text lives in the ``thinking`` field, emitted as
-    a thinking message). ``tool_use`` and ``tool_result`` parts are skipped:
-    tool traffic is not conversation and must not enter the index.
-    Records producing no content yield no messages.
+    Factory content arrays mix reasoning (thinking) and text parts. Thinking
+    parts store their text in the 'thinking' field and are emitted as separate
+    thinking messages. The session model (from .settings.json) is attached to
+    ALL assistant messages, including thinking messages.
     """
     msg_data = record.get("message", {})
     role = MESSAGE_ROLES.get(msg_data.get("role", ""))
@@ -72,14 +75,17 @@ def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
     is_system = role is MessageRole.SYSTEM
 
     def build(content: str, *, is_thinking: bool = False) -> Message:
+        # Model is for assistant messages (including thinking)
+        msg_model = model if role is MessageRole.ASSISTANT else None
         return Message(
             role=role,
             content=content,
             timestamp=timestamp,
             message_id=message_id,
             is_thinking=is_thinking,
-            is_system_instruction=is_system,
             is_injected=is_injected,
+            is_system_instruction=is_system,
+            model=msg_model,
         )
 
     messages: list[Message] = []
@@ -98,3 +104,24 @@ def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
     if text:
         messages.append(build(text))
     return messages
+
+
+def _read_factory_session_model(path: Path) -> str | None:
+    """Read the model identifier from a Factory .settings.json companion file.
+
+    Factory Droid stores session metadata (including the model) in a sibling
+    ``<uuid>.settings.json`` file. The model field is at the root:
+    ``{\"model\": \"custom:provider:model-name\", ...}``.
+
+    Returns None if the settings file is missing or unparseable.
+    """
+    settings_path = path.with_suffix(".settings.json")
+    if not settings_path.exists():
+        return None
+    try:
+        import json
+
+        settings = json.loads(settings_path.read_text())
+        return settings.get("model")
+    except (json.JSONDecodeError, OSError, KeyError):
+        return None
