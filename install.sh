@@ -11,6 +11,7 @@ set -euo pipefail
 
 LABEL_BACKEND="com.agent-oracle.backend"
 LABEL_FRONTEND="com.agent-oracle.frontend"
+LABEL_BACKUP="com.agent-oracle.backup"
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/.agent-oracle/logs"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,7 +34,7 @@ fi
 mkdir -p "$LAUNCH_DIR" "$LOG_DIR"
 
 # Remove any existing agents so this script is safe to re-run.
-for label in "$LABEL_BACKEND" "$LABEL_FRONTEND"; do
+for label in "$LABEL_BACKEND" "$LABEL_FRONTEND" "$LABEL_BACKUP"; do
     if launchctl list "$label" &>/dev/null; then
         echo "Unloading existing $label ..."
         launchctl unload "$LAUNCH_DIR/$label.plist" 2>/dev/null || true
@@ -130,6 +131,43 @@ cat >"$LAUNCH_DIR/$LABEL_FRONTEND.plist" <<PLIST
 PLIST
 
 #
+# --- Backup plist ----------------------------------------------------------
+#
+# Runs the database backup script at 12:00 and 18:00 every day.
+#
+cat >"$LAUNCH_DIR/$LABEL_BACKUP.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL_BACKUP</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>$PROJECT_DIR/scripts/backup-db.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>12</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>18</integer>
+        </dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>$LOG_DIR/backup.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_DIR/backup.err.log</string>
+</dict>
+</plist>
+PLIST
+
+#
 # --- Load and start both services -----------------------------------------
 #
 echo "Loading $LABEL_BACKEND ..."
@@ -138,10 +176,14 @@ launchctl load "$LAUNCH_DIR/$LABEL_BACKEND.plist"
 echo "Loading $LABEL_FRONTEND ..."
 launchctl load "$LAUNCH_DIR/$LABEL_FRONTEND.plist"
 
+echo "Loading $LABEL_BACKUP ..."
+launchctl load "$LAUNCH_DIR/$LABEL_BACKUP.plist"
+
 echo ""
 echo "Agent Oracle services installed and started."
 echo "  Backend:  http://localhost:8731  (logs: $LOG_DIR/backend.{out,err}.log)"
 echo "  Frontend: http://localhost:8732  (logs: $LOG_DIR/frontend.{out,err}.log)"
+echo "  Backup:   12:00 and 18:00 daily (logs: $LOG_DIR/backup.{out,err}.log)"
 echo ""
 echo "Both services will start at login and restart on crash."
 echo "Manage them with:"
