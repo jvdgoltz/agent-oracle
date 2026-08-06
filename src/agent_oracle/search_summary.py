@@ -61,6 +61,7 @@ class SearchSummarizer:
         if self._api_key:
             _CODEX_HOME.mkdir(parents=True, exist_ok=True, mode=0o700)
             self._config.env = {"CODEX_HOME": str(_CODEX_HOME)}
+            self._config.cwd = str(_CODEX_HOME)
 
     @staticmethod
     def _mcp_url(base_url: str) -> str:

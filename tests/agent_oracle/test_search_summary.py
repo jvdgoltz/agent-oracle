@@ -170,6 +170,7 @@ def test_api_key_login_uses_isolated_codex_home(monkeypatch: pytest.MonkeyPatch,
         SearchSummarizer().summarize("sqlite", RESULTS)
     config = codex_cls.call_args.args[0]
     assert config.env == {"CODEX_HOME": str(home)}
+    assert config.cwd == str(home)
     assert home.is_dir()
     codex.login_api_key.assert_called_once_with("sk-test")
 
