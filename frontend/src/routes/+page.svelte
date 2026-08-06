@@ -131,7 +131,6 @@
 				type="search"
 				placeholder="Search agent sessions…"
 				bind:value={query}
-				onkeydown={(e) => e.key === 'Enter' && runSearch()}
 			/>
 			{#if query}
 				<button
@@ -236,7 +235,7 @@
 							{/if}
 							{#if result.message_snippets.length > 0}
 								<ul class="msg-snippets">
-									{#each result.message_snippets as snip (snip)}
+									{#each result.message_snippets as snip, i (snip + i)}
 										<li class="msg-snippet">{snip}</li>
 									{/each}
 								</ul>

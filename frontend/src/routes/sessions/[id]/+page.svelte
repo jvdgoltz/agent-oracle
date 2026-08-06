@@ -133,7 +133,7 @@
 
 		{#if session.entities && session.entities.length > 0}
 			<div class="entities">
-				{#each session.entities as entity (entity.value)}
+				{#each session.entities as entity (entity.type + entity.value)}
 					<span class="entity-tag"
 						><span class="entity-type">{entity.type}</span>{entity.value}</span
 					>
