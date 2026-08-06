@@ -4,6 +4,11 @@
 Local web app that archives coding agent sessions (Codex, Factory Droid, Claude Code,
 Oh My Pi) into `~/.agent-oracle/` and makes them searchable (text / vector / hybrid)
 with LLM-enriched entities and summaries. The backend also serves coding agents via REST + MCP.
+Never do full re-indexing (deleting and re-indexing all sessions). If the database needs
+a new column or a column needs to be changed, create ad hoc scripts that only populate
+or migrate those columns, rather than running parsing + embedding + enriching again for
+the whole database. Full re-indexing is expensive and should only be done if explicitly
+requested by the user, and you have asked for confirmation again.
 
 - Backend: Python 3.11+, FastAPI, SQLite (FTS5 + sqlite-vec), FastEmbed, OpenAI API, FastMCP.
   Source in `src/agent_oracle/`, tests in `tests/` (one `test_*.py` per source module).
