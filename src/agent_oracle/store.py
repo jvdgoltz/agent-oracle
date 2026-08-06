@@ -11,6 +11,7 @@ import logging
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import sqlite_vec
 
@@ -18,8 +19,23 @@ from agent_oracle.models import Session
 
 logger = logging.getLogger(__name__)
 
+
 _EMBED_DIM = 384
 _RRF_K = 60
+
+
+def _merge_by_score(
+    message_rows: list[sqlite3.Row], summary_rows: list[sqlite3.Row], score_key: str
+) -> list[dict[str, Any]]:
+    """Merge message and summary rows, ordered by *score_key*, dropping NULLs.
+
+    NULL scores (e.g. ``bm25()`` on rows whose FTS5 docsize entry is missing)
+    cannot be ordered and indicate an unscoreable match, so those rows are
+    dropped rather than crashing the sort.
+    """
+    merged = [dict(r) for r in (*message_rows, *summary_rows) if r[score_key] is not None]
+    merged.sort(key=lambda r: r[score_key])
+    return merged
 
 
 def _sanitize_fts_query(query: str) -> str:
@@ -317,11 +333,7 @@ class Store:
             """,
             (fts_query, limit),
         ).fetchall()
-        merged = sorted(
-            (dict(r) for r in (*message_rows, *summary_rows)),
-            key=lambda r: r["rank"],
-        )
-        return merged[:limit]
+        return _merge_by_score(message_rows, summary_rows, "rank")[:limit]
 
     def search_vector(self, query_embedding: list[float], limit: int = 20) -> list[dict]:
         """sqlite-vec cosine search over message and summary embeddings."""
@@ -334,7 +346,7 @@ class Store:
                    s.cwd        AS cwd,
                    s.started_at AS started_at,
                    s.summary    AS summary,
-                   v.distance   AS distance
+                   v.distance  AS distance
             FROM vec_messages v
             JOIN messages m ON m.id = v.rowid
             JOIN sessions s ON s.id = m.session_id
@@ -359,11 +371,7 @@ class Store:
             """,
             (blob, limit),
         ).fetchall()
-        merged = sorted(
-            (dict(r) for r in (*message_rows, *summary_rows)),
-            key=lambda r: r["distance"],
-        )
-        return merged[:limit]
+        return _merge_by_score(message_rows, summary_rows, "distance")[:limit]
 
     def search_hybrid(
         self, query: str, query_embedding: list[float], limit: int = 20

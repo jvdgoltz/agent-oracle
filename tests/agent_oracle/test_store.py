@@ -265,6 +265,19 @@ def test_search_text_no_results(store: Store) -> None:
     assert results == []
 
 
+def test_merge_by_score_drops_null_rank_rows() -> None:
+    """Rows with a NULL score are dropped instead of crashing the sort."""
+    from agent_oracle.store import _merge_by_score
+
+    def row(rank, snippet="x"):
+        return {"rank": rank, "snippet": snippet}
+
+    message_rows = [row(None, "unscoreable"), row(-0.5, "good")]
+    summary_rows = [row(None, "unscoreable-summary")]
+    merged = _merge_by_score(message_rows, summary_rows, "rank")
+    assert [r["rank"] for r in merged] == [-0.5]
+
+
 # --------------------------------------------------------------------------- #
 # search_vector
 # --------------------------------------------------------------------------- #
