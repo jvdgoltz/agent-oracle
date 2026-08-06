@@ -12,12 +12,12 @@ from agent_oracle.api import create_app
 def _client(
     store: MagicMock | None = None,
     embedder: MagicMock | None = None,
-    enricher: MagicMock | None = None,
+    summarizer: MagicMock | None = None,
 ):
     """Return a TestClient plus the injected store and embedder mocks."""
     store = store or MagicMock()
     embedder = embedder or MagicMock()
-    app = create_app(store, embedder, enricher)
+    app = create_app(store, embedder, summarizer)
     return TestClient(app), store, embedder
 
 
@@ -259,21 +259,21 @@ def test_search_filters_by_entity() -> None:
 
 
 def test_search_summary_returns_ai_summary() -> None:
-    """The summary endpoint calls the enricher and returns its text."""
-    enricher = MagicMock()
-    enricher.summarize_search.return_value = "These sessions cover SQLite usage."
-    client, _store, _embedder = _client(enricher=enricher)
+    """The summary endpoint calls the summarizer and returns its text."""
+    summarizer = MagicMock()
+    summarizer.summarize.return_value = "These sessions cover SQLite usage."
+    client, _store, _embedder = _client(summarizer=summarizer)
     resp = client.post(
         "/api/search/summary",
         json={"query": "sqlite", "results": [{"snippet": "a", "summary": "b"}]},
     )
     assert resp.status_code == 200
     assert resp.json() == {"summary": "These sessions cover SQLite usage."}
-    enricher.summarize_search.assert_called_once_with("sqlite", [{"snippet": "a", "summary": "b"}])
+    summarizer.summarize.assert_called_once_with("sqlite", [{"snippet": "a", "summary": "b"}])
 
 
-def test_search_summary_without_enricher_returns_empty() -> None:
-    """When no enricher is configured, the summary endpoint returns empty."""
+def test_search_summary_without_summarizer_returns_empty() -> None:
+    """When no summarizer is configured, the summary endpoint returns empty."""
     client, _store, _embedder = _client()
     resp = client.post(
         "/api/search/summary",
@@ -285,9 +285,22 @@ def test_search_summary_without_enricher_returns_empty() -> None:
 
 def test_search_summary_with_no_results_returns_empty() -> None:
     """When no results are provided, the summary endpoint returns empty."""
-    enricher = MagicMock()
-    client, _store, _embedder = _client(enricher=enricher)
+    summarizer = MagicMock()
+    client, _store, _embedder = _client(summarizer=summarizer)
     resp = client.post("/api/search/summary", json={"query": "x", "results": []})
     assert resp.status_code == 200
     assert resp.json() == {"summary": ""}
-    enricher.summarize_search.assert_not_called()
+    summarizer.summarize.assert_not_called()
+
+
+def test_search_summary_fails_open_on_summarizer_error() -> None:
+    """A summarizer failure logs and returns an empty summary with 200."""
+    summarizer = MagicMock()
+    summarizer.summarize.side_effect = RuntimeError("codex down")
+    client, _store, _embedder = _client(summarizer=summarizer)
+    resp = client.post(
+        "/api/search/summary",
+        json={"query": "sqlite", "results": [{"snippet": "a"}]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"summary": ""}

@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent_oracle.embed import Embedder
-from agent_oracle.enrich import Enricher
+from agent_oracle.search_summary import SearchSummarizer
 from agent_oracle.store import Store
 
 logger = logging.getLogger(__name__)
@@ -23,17 +23,19 @@ logger = logging.getLogger(__name__)
 SearchResult = dict[str, Any]
 
 
-def create_app(store: Store, embedder: Embedder, enricher: Enricher | None = None) -> FastAPI:
+def create_app(
+    store: Store, embedder: Embedder, summarizer: SearchSummarizer | None = None
+) -> FastAPI:
     """Build and configure the Agent Oracle FastAPI application.
 
-    The *store*, *embedder*, and optional *enricher* are attached to
+    The *store*, *embedder*, and optional *summarizer* are attached to
     ``app.state`` and CORS is enabled for all origins to support local
     development against the backend.
     """
     app = FastAPI(title="Agent Oracle API", version="0.1.0")
     app.state.store = store
     app.state.embedder = embedder
-    app.state.enricher = enricher
+    app.state.summarizer = summarizer
 
     app.add_middleware(
         CORSMiddleware,
@@ -122,17 +124,17 @@ def _register_summary_route(app: FastAPI) -> None:
 
         Accepts a JSON body with ``query`` and ``results`` (the search payloads)
         and returns ``{"summary": "..."}``. Returns an empty summary if no
-        enricher is configured or the API call fails.
+        summarizer is configured or the agent run fails.
         """
-        enricher = request.app.state.enricher
-        if enricher is None:
+        summarizer = request.app.state.summarizer
+        if summarizer is None:
             return {"summary": ""}
         query = body.get("query", "")
         results = body.get("results", [])
         if not results:
             return {"summary": ""}
         try:
-            summary = enricher.summarize_search(query, results)
+            summary = summarizer.summarize(query, results)
         except Exception:
             logger.warning("Search summary generation failed", exc_info=True)
             summary = ""

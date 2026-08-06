@@ -20,6 +20,7 @@ from agent_oracle.api import create_app
 from agent_oracle.embed import Embedder
 from agent_oracle.enrich import Enricher
 from agent_oracle.mcp_server import create_mcp_server
+from agent_oracle.search_summary import SearchSummarizer
 from agent_oracle.store import Store
 from agent_oracle.watcher import SessionWatcher
 
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 #: Where Agent Oracle stores its database and copied sessions.
 DATA_DIR = Path.home() / ".agent-oracle"
+
+#: TCP port the backend listens on (mirrored in the launchd service spec).
+PORT = 8731
 
 
 def _create_components() -> tuple[Store, Embedder, Enricher, SessionWatcher]:
@@ -70,6 +74,9 @@ _store, _embedder, _enricher, _watcher = _components
 _mcp = create_mcp_server(_store, _embedder)
 _mcp_app = _mcp.http_app(path="/")
 
+#: Codex-agent summarizer backing POST /api/search/summary.
+_summarizer = SearchSummarizer(base_url=f"http://127.0.0.1:{PORT}")
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -79,10 +86,11 @@ async def _lifespan(app: FastAPI):
         async with _mcp_app.lifespan(app):
             yield
     finally:
+        _summarizer.close()
         _watcher.stop()
 
 
-app: FastAPI = create_app(_store, _embedder, enricher=_enricher)
+app: FastAPI = create_app(_store, _embedder, summarizer=_summarizer)
 app.router.lifespan_context = _lifespan
 app.mount("/mcp", _mcp_app)
 
@@ -95,6 +103,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "agent_oracle.main:app",
         host="0.0.0.0",
-        port=8731,
+        port=PORT,
         reload=True,
     )
