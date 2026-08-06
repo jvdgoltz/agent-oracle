@@ -8,7 +8,7 @@
 /**
  * Base URL for the backend API, overridable via `VITE_API_URL`.
  */
-const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8731';
 
 /** A single message within a session. */
 export interface Message {
