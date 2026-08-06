@@ -12,12 +12,11 @@ Session metadata (sessionId, cwd) is extracted from the first message record.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
 from agent_oracle.models import AgentType, Message, MessageRole, Session
-from agent_oracle.sources.common import MESSAGE_ROLES, parse_timestamp
+from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
 
 _MESSAGE_TYPES = {"user", "assistant"}
 
@@ -30,9 +29,9 @@ def parse_claude_session(path: Path) -> Session:
     messages: list[Message] = []
 
     for line in path.read_text().splitlines():
-        if not line.strip():
+        record = parse_jsonl_line(line)
+        if record is None:
             continue
-        record = json.loads(line)
         record_type = record.get("type", "")
 
         if record_type not in _MESSAGE_TYPES:

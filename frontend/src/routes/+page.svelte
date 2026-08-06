@@ -26,7 +26,8 @@
 		{ value: '', label: 'All' },
 		{ value: 'codex', label: 'Codex' },
 		{ value: 'factory', label: 'Factory' },
-		{ value: 'claude', label: 'Claude' }
+		{ value: 'claude', label: 'Claude' },
+		{ value: 'omp', label: 'OMP' }
 	];
 
 	let sessions: SessionSummary[] = $state([]);

@@ -18,10 +18,11 @@ class AgentType(StrEnum):
     CODEX = "codex"
     FACTORY = "factory"
     CLAUDE = "claude"
+    OMP = "omp"
 
 
 class MessageRole(StrEnum):
-    """Roles a message can have across all three agents."""
+    """Roles a message can have across all supported agents."""
 
     USER = "user"
     ASSISTANT = "assistant"

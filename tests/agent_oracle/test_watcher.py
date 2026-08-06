@@ -15,6 +15,7 @@ from agent_oracle.models import AgentType, Session
 from agent_oracle.sources.claude import parse_claude_session
 from agent_oracle.sources.codex import parse_codex_session
 from agent_oracle.sources.factory import parse_factory_session
+from agent_oracle.sources.omp import parse_omp_session
 from agent_oracle.store import Store
 from agent_oracle.watcher import _HOME, SessionWatcher
 
@@ -90,6 +91,32 @@ def _claude_jsonl(tmp_path: Path) -> Path:
     return path
 
 
+def _omp_jsonl(tmp_path: Path) -> Path:
+    """Write a minimal OMP session JSONL and return its path."""
+    path = tmp_path / "omp-sess.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session",
+                "id": "omp-sess",
+                "cwd": "/tmp",
+                "timestamp": "2024-01-01T00:00:00Z",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "message",
+                "id": "u1",
+                "timestamp": "2024-01-01T00:00:01Z",
+                "message": {"role": "user", "content": [{"type": "text", "text": "hi there"}]},
+            }
+        )
+        + "\n"
+    )
+    return path
+
+
 def _make_watcher() -> tuple[SessionWatcher, MagicMock, MagicMock, MagicMock]:
     """Build a watcher with fully mocked store, embedder, and enricher."""
     store = MagicMock(spec=Store)
@@ -105,6 +132,7 @@ def _map_dirs(tmp_path: Path) -> dict[AgentType, Path]:
         AgentType.CODEX: tmp_path / ".codex" / "sessions",
         AgentType.FACTORY: tmp_path / ".factory" / "sessions",
         AgentType.CLAUDE: tmp_path / ".claude" / "projects",
+        AgentType.OMP: tmp_path / ".omp" / "agent" / "sessions",
     }
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
@@ -117,10 +145,12 @@ def test_detect_parser_by_path() -> None:
     codex_dir = _HOME / ".codex" / "sessions"
     factory_dir = _HOME / ".factory" / "sessions"
     claude_dir = _HOME / ".claude" / "projects"
+    omp_dir = _HOME / ".omp" / "agent" / "sessions"
 
     assert watcher._detect_parser(codex_dir / "a.jsonl") is parse_codex_session
     assert watcher._detect_parser(factory_dir / "a.jsonl") is parse_factory_session
     assert watcher._detect_parser(claude_dir / "a.jsonl") is parse_claude_session
+    assert watcher._detect_parser(omp_dir / "a.jsonl") is parse_omp_session
     assert watcher._detect_parser(Path("/elsewhere/session.jsonl")) is None
 
 
@@ -205,18 +235,50 @@ def test_index_file_routes_to_claude_normalizer(tmp_path: Path) -> None:
     assert enricher.enrich.call_args.args[0].id == "claude-sess"
 
 
-def test_index_file_continues_on_failure(tmp_path: Path) -> None:
-    """A failed parse is logged and does not raise out of the watcher."""
+def test_index_file_routes_to_omp_normalizer(tmp_path: Path) -> None:
+    """A .jsonl under the omp dir is parsed with the omp normalizer."""
+    omp_dir = tmp_path / ".omp" / "agent" / "sessions"
+    omp_dir.mkdir(parents=True)
+    source = _omp_jsonl(omp_dir)
+    watcher, store, _embedder, enricher = _make_watcher()
+    store.get_session.return_value = {"messages": []}
+    enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
+
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        watcher._index_file(source)
+
+    session = store.index_session.call_args.args[0]
+    assert isinstance(session, Session)
+    assert session.agent == AgentType.OMP
+    assert enricher.enrich.call_args.args[0].id == "omp-sess"
+
+
+def test_index_file_continues_on_malformed_line(tmp_path: Path) -> None:
+    """A truncated JSONL line is skipped, not fatal; earlier messages survive."""
     codex_dir = tmp_path / ".codex" / "sessions"
     codex_dir.mkdir(parents=True)
     bad = codex_dir / "bad.jsonl"
-    bad.write_text("not valid json\n")
+    bad.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "bad", "cwd": "/tmp", "timestamp": "2024-01-01T00:00:00Z"},
+            }
+        )
+        + "\n"
+        + '{"type":"response_item","payload":{"type":"message","role":"user",'
+        + '"content":[{"type":"text","text":"par'
+    )
     watcher, store, _, _ = _make_watcher()
+    store.get_session.return_value = {"messages": []}
 
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(bad)
 
-    store.index_session.assert_not_called()
+    store.index_session.assert_called_once()
+    session = store.index_session.call_args.args[0]
+    assert session.id == "bad"
+    assert len(session.messages) == 0
 
 
 def test_enrich_embeds_summary(tmp_path: Path) -> None:
@@ -254,12 +316,13 @@ def test_enrich_skips_summary_embedding_when_empty(tmp_path: Path) -> None:
     store.upsert_session_embedding.assert_not_called()
 
 
-def test_index_existing_discovers_all_three_dirs(tmp_path: Path) -> None:
+def test_index_existing_discovers_all_watched_dirs(tmp_path: Path) -> None:
     """index_existing walks each watched directory for .jsonl files."""
     dirs = _map_dirs(tmp_path)
     codex = _codex_jsonl(dirs[AgentType.CODEX])
     factory = _factory_jsonl(dirs[AgentType.FACTORY])
     claude = _claude_jsonl(dirs[AgentType.CLAUDE])
+    omp = _omp_jsonl(dirs[AgentType.OMP])
     # A non-JSONL file must be skipped.
     (dirs[AgentType.CODEX] / "notes.txt").write_text("ignore")
 
@@ -271,12 +334,13 @@ def test_index_existing_discovers_all_three_dirs(tmp_path: Path) -> None:
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher.index_existing()
 
-    assert store.index_session.call_count == 3
+    assert store.index_session.call_count == 4
     indexed_ids = {call.args[0].id for call in store.index_session.call_args_list}
-    assert indexed_ids == {"codex-sess", "fact-sess", "claude-sess"}
+    assert indexed_ids == {"codex-sess", "fact-sess", "claude-sess", "omp-sess"}
     assert codex.exists()
     assert factory.exists()
     assert claude.exists()
+    assert omp.exists()
 
 
 def test_debounce_cancels_and_reschedules_timer() -> None:

@@ -32,8 +32,8 @@ def test_session_creation() -> None:
 
 
 def test_agent_type_values() -> None:
-    """AgentType has exactly the three supported agents."""
-    assert {AgentType.CODEX, AgentType.FACTORY, AgentType.CLAUDE}
+    """AgentType has exactly the supported agents."""
+    assert {AgentType.CODEX, AgentType.FACTORY, AgentType.CLAUDE, AgentType.OMP}
 
 
 def test_message_metadata_defaults() -> None:

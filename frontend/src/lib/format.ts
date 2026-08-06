@@ -3,7 +3,7 @@
  */
 
 /** The set of agents that receive distinct badge styling. */
-export type Agent = 'codex' | 'factory' | 'claude';
+export type Agent = 'codex' | 'factory' | 'claude' | 'omp';
 
 /**
  * Format an ISO timestamp as a short relative time string (e.g. "3m ago").
@@ -32,5 +32,6 @@ export function knownAgent(agent: string): Agent | null {
 	if (normalized.includes('codex')) return 'codex';
 	if (normalized.includes('factory') || normalized.includes('droid')) return 'factory';
 	if (normalized.includes('claude')) return 'claude';
+	if (normalized.includes('omp')) return 'omp';
 	return null;
 }

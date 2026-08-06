@@ -12,12 +12,11 @@ Each line is a JSON object with ``type`` and ``payload`` fields:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
 from agent_oracle.models import AgentType, Message, MessageRole, Session
-from agent_oracle.sources.common import MESSAGE_ROLES, parse_timestamp
+from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
 
 #: Content tags that mark a user message as injected context rather than real input.
 _INJECTED_TAGS = ("<system-reminder>", "<permissions instructions>", "<collaboration_mode>")
@@ -32,9 +31,9 @@ def parse_codex_session(path: Path) -> Session:
     current_model: str | None = None
 
     for line in path.read_text().splitlines():
-        if not line.strip():
+        record = parse_jsonl_line(line)
+        if record is None:
             continue
-        record = json.loads(line)
         record_type = record.get("type")
         payload = record.get("payload", {})
         timestamp = parse_timestamp(record.get("timestamp", ""))

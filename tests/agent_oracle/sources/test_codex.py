@@ -111,3 +111,43 @@ def test_parse_concatenates_content_parts(tmp_path: Path) -> None:
     session = parse_codex_session(path)
 
     assert session.messages[0].content == "part1 part2"
+
+
+def test_parse_skips_truncated_line(tmp_path: Path) -> None:
+    """A malformed final line (partial write) is skipped, not fatal."""
+    truncated = (
+        '{"type":"response_item","payload":{"type":"message","role":"assistant",'
+        '"content":[{"type":"text","text":"par'
+    )
+    path = tmp_path / "rollout-trunc.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "trunc-001",
+                    "cwd": "/tmp",
+                    "timestamp": "2024-01-01T00:00:00Z",
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi"}],
+                },
+                "timestamp": "2024-01-01T00:00:01Z",
+            }
+        )
+        + "\n"
+        + truncated
+    )
+    session = parse_codex_session(path)
+
+    assert session.id == "trunc-001"
+    assert len(session.messages) == 1
+    assert session.messages[0].content == "hi"

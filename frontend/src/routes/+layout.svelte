@@ -63,6 +63,7 @@
 		--codex-color: #7aa2f7;
 		--factory-color: #ffb86c;
 		--claude-color: #e879a0;
+		--omp-color: #9ece6a;
 
 		/* Semantic */
 		--error: #f7768e;

@@ -21,6 +21,7 @@ from agent_oracle.models import AgentType, Session
 from agent_oracle.sources.claude import parse_claude_session
 from agent_oracle.sources.codex import parse_codex_session
 from agent_oracle.sources.factory import parse_factory_session
+from agent_oracle.sources.omp import parse_omp_session
 from agent_oracle.store import Store
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ _PARSERS: dict[AgentType, Callable[[Path], Session]] = {
     AgentType.CODEX: parse_codex_session,
     AgentType.FACTORY: parse_factory_session,
     AgentType.CLAUDE: parse_claude_session,
+    AgentType.OMP: parse_omp_session,
 }
 
 
@@ -42,6 +44,7 @@ def _watched_dirs() -> dict[AgentType, Path]:
         AgentType.CODEX: _HOME / ".codex" / "sessions",
         AgentType.FACTORY: _HOME / ".factory" / "sessions",
         AgentType.CLAUDE: _HOME / ".claude" / "projects",
+        AgentType.OMP: _HOME / ".omp" / "agent" / "sessions",
     }
 
 

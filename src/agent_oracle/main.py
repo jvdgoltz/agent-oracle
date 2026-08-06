@@ -73,29 +73,21 @@ _mcp_app = _mcp.http_app(path="/")
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Enter the MCP session lifespan on startup, clean up on shutdown."""
-    async with _mcp_app.lifespan(app):
-        yield
+    """Start indexing, enter the MCP session lifespan, then stop on shutdown."""
+    _start_background_indexing(_watcher)
+    try:
+        async with _mcp_app.lifespan(app):
+            yield
+    finally:
+        _watcher.stop()
 
 
 app: FastAPI = create_app(_store, _embedder, enricher=_enricher)
 app.router.lifespan_context = _lifespan
 app.mount("/mcp", _mcp_app)
 
-#: The watcher is started once on import so live changes are tracked.
-_watcher_instance: SessionWatcher | None = None
-
-
-def _ensure_watcher_running() -> None:
-    """Start the background indexing and watcher (once per process)."""
-    global _watcher_instance
-    if _watcher_instance is not None:
-        return
-    _watcher_instance = _create_components()[3]
-    _start_background_indexing(_watcher_instance)
-
-
-_ensure_watcher_running()
+#: The watcher is started in the lifespan so it only runs in the worker
+#: process, not the uvicorn reloader parent.
 
 
 if __name__ == "__main__":
@@ -103,6 +95,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "agent_oracle.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8731,
         reload=True,
     )
