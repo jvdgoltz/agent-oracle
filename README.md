@@ -1,9 +1,10 @@
 # Agent Oracle
 
-Local web app that archives coding agent sessions (Codex, Factory Droid, Claude Code)
-into `~/.agent-oracle/` and makes them searchable with text, vector, and hybrid search.
-Sessions are enriched by an LLM with entities and summaries. The backend also serves
-coding agents themselves via REST + MCP, so agents can search past sessions.
+Local web app that archives coding agent sessions (Codex, Factory Droid, Claude Code,
+Oh My Pi) into `~/.agent-oracle/` and makes them searchable with text, vector, and
+hybrid search. Sessions are enriched by an LLM with entities and summaries. The
+backend also serves coding agents themselves via REST + MCP, so agents can search
+past sessions.
 
 ## Stack
 
@@ -22,8 +23,8 @@ cp .env.example .env          # fill in OPENAI_API_KEY
 ## Run
 
 ```bash
-uv run uvicorn agent_oracle.api:app --reload   # backend, http://localhost:8000
-cd frontend && npm run dev                     # frontend, http://localhost:5173
+uv run python -m agent_oracle.main                 # backend, http://localhost:8731
+cd frontend && npm run dev                     # frontend, http://localhost:8732
 ```
 
 ## Development

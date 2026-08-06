@@ -1,9 +1,9 @@
 # Coding Agent Instructions
 
 ## Project: Agent Oracle
-Local web app that archives coding agent sessions (Codex, Factory Droid, Claude Code)
-into `~/.agent-oracle/` and makes them searchable (text / vector / hybrid) with
-LLM-enriched entities and summaries. The backend also serves coding agents via REST + MCP.
+Local web app that archives coding agent sessions (Codex, Factory Droid, Claude Code,
+Oh My Pi) into `~/.agent-oracle/` and makes them searchable (text / vector / hybrid)
+with LLM-enriched entities and summaries. The backend also serves coding agents via REST + MCP.
 
 - Backend: Python 3.11+, FastAPI, SQLite (FTS5 + sqlite-vec), FastEmbed, OpenAI API, FastMCP.
   Source in `src/agent_oracle/`, tests in `tests/` (one `test_*.py` per source module).
@@ -18,8 +18,21 @@ LLM-enriched entities and summaries. The backend also serves coding agents via R
 
 ### Backend verification
 Whenever making changes to the backend, test the affected endpoints by calling
-them (e.g. via `curl http://localhost:8000/api/...`) and the MCP endpoints.
+them (e.g. via `curl http://localhost:8731/api/...`) and the MCP endpoints.
 Do not rely on unit tests alone to verify backend behavior.
+
+### Running services
+Both the backend and frontend are managed by `launchd` and may already be
+running in the background. Before starting either service manually, check
+whether it is already running:
+
+```bash
+launchctl list | grep com.agent-oracle
+```
+
+If a service is already loaded, its `--reload` flag will pick up code changes
+automatically; there is no need to start a second instance. The `install.sh`
+script in the repository root installs, loads, and starts both services.
 
 ## Coding Style
 - Simple functions, proper abstraction. Keep functions short. Code should be self-explanatory. Repository folder structure should be self-explanatory.
