@@ -12,7 +12,7 @@ dependencies = [
     "openai-codex==0.144.4",
     "python-dotenv>=1.2.2",
     "sqlite-vec>=0.1.9",
-    "uvicorn[standard]>=0.50.0",
+    "uvicorn[standard]>=0.50.2",
     "watchdog>=6.0.0",
 ]
 
