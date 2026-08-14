@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { onDestroy, onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import {
 		agentEventsUrl,
@@ -104,7 +104,7 @@
 			return;
 		}
 		if (agentEvent.type === 'assistant') {
-			appendAssistant(extractText(agentEvent.data));
+			appendAssistant(extractText(agentEvent.data), agentEvent.method === 'item/completed');
 			return;
 		}
 		if (agentEvent.type === 'user') {
@@ -189,13 +189,19 @@
 	}
 
 	/** Append streaming text to the assistant bubble for this turn. */
-	function appendAssistant(text: string): void {
+	function appendAssistant(text: string, isFinal = false): void {
 		if (!text) return;
 		receivedAssistant = true;
 		const entry = entries.find((candidate) => candidate.id === activeAssistantId);
 		if (entry) {
+			if (isFinal && (entry.text === text || entry.text.endsWith(text))) return;
 			entries = entries.map((candidate) =>
-				candidate.id === entry.id ? { ...candidate, text: candidate.text + text } : candidate
+				candidate.id === entry.id
+					? {
+							...candidate,
+							text: isFinal && text.startsWith(candidate.text) ? text : candidate.text + text
+						}
+					: candidate
 			);
 			return;
 		}
@@ -255,12 +261,6 @@
 		}
 	}
 
-	/** Stop the backend turn when this page or browser connection goes away. */
-	function cancelOnDisconnect(): void {
-		source?.close();
-		if (running || submitting) void stopAgentSession(threadId).catch(() => undefined);
-	}
-
 	/** Return concise visible text from a structured Codex event payload. */
 	function extractText(data: unknown): string {
 		if (typeof data === 'string') return data;
@@ -310,6 +310,8 @@
 		if (event.type === 'auth' && authMode(event.data) === 'api_key_fallback') {
 			return 'API key fallback';
 		}
+		const toolName = eventToolName(event.data);
+		if (toolName) return `Tool call: ${toolName}`;
 		const labels: Record<string, string> = {
 			reasoning: 'Reasoning',
 			status: 'Status',
@@ -325,8 +327,23 @@
 			: (labels[event.type] ?? event.type);
 	}
 
+	/** Extract a human-readable tool name from an SDK item payload. */
+	function eventToolName(data: unknown): string | undefined {
+		if (!data || typeof data !== 'object') return undefined;
+		const record = data as Record<string, unknown>;
+		const item =
+			record.item && typeof record.item === 'object'
+				? (record.item as Record<string, unknown>)
+				: record;
+		if (typeof item.type !== 'string' || !item.type.toLowerCase().includes('tool'))
+			return undefined;
+		for (const key of ['name', 'toolName', 'tool_name', 'serverName', 'server_name']) {
+			if (typeof item[key] === 'string') return item[key];
+		}
+		return undefined;
+	}
+
 	onMount(initialize);
-	onDestroy(cancelOnDisconnect);
 </script>
 
 <section class="agent-page">

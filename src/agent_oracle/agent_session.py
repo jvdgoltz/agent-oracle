@@ -156,13 +156,6 @@ class AgentSessionManager:
             raise AgentSessionError("agent session is not running")
         state.turn.interrupt()
 
-    def cancel_on_disconnect(self, thread_id: str) -> None:
-        """Cancel a running turn when its SSE client disconnects."""
-        try:
-            self.stop(thread_id)
-        except AgentSessionError:
-            return
-
     def new_session(self, thread_id: str) -> None:
         """Retire a session now and close its client after any active turn exits."""
         with self._lock:

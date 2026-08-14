@@ -312,18 +312,13 @@ async def _sse_events(
     manager: AgentSessionManager,
     thread_id: str,
 ) -> AsyncIterator[str]:
-    """Encode agent events and cancel the turn if its browser disconnects."""
-    try:
-        while not manager.stream_closed(thread_id):
-            if await request.is_disconnected():
-                manager.cancel_on_disconnect(thread_id)
-                return
-            event = await asyncio.to_thread(manager.next_event, thread_id, 0.1)
-            if event is not None:
-                yield encode_sse(event)
-    finally:
+    """Encode agent events while leaving turns alive across client reconnects."""
+    while not manager.stream_closed(thread_id):
         if await request.is_disconnected():
-            manager.cancel_on_disconnect(thread_id)
+            return
+        event = await asyncio.to_thread(manager.next_event, thread_id, 0.1)
+        if event is not None:
+            yield encode_sse(event)
 
 
 def _agent_repo_root() -> str:

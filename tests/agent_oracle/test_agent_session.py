@@ -140,7 +140,6 @@ def test_controls_wait_for_turn_setup_then_interrupt_the_new_handle() -> None:
 
     controls = [
         threading.Thread(target=stop_without_propagating_retirement_races),
-        threading.Thread(target=lambda: manager.cancel_on_disconnect("thread-1")),
         threading.Thread(target=lambda: manager.new_session("thread-1")),
     ]
     for control in controls:

@@ -30,9 +30,6 @@ class _SseManager:
         self.reads += 1
         return {"type": "assistant", "data": {"delta": "Hello"}}
 
-    def cancel_on_disconnect(self, thread_id: str) -> None:
-        """Accept the disconnect callback for the test transport."""
-
 
 def test_agent_start_returns_thread_id() -> None:
     """The agent endpoint immediately returns the started Codex thread ID."""
@@ -204,8 +201,8 @@ def test_resume_candidates_read_past_the_first_page() -> None:
     assert store.list_sessions.call_args_list[1].kwargs == {"limit": 200, "offset": 200}
 
 
-def test_sse_disconnect_cancels_agent() -> None:
-    """A disconnected SSE client requests turn cancellation without blocking the loop."""
+def test_sse_disconnect_leaves_agent_turn_running() -> None:
+    """A transient SSE disconnect ends only the response stream."""
     request = MagicMock()
 
     async def disconnected() -> bool:
@@ -221,7 +218,7 @@ def test_sse_disconnect_cancels_agent() -> None:
         return [event async for event in _sse_events(request, manager, "thread-1")]
 
     assert asyncio.run(consume()) == []
-    manager.cancel_on_disconnect.assert_called_with("thread-1")
+    manager.stop.assert_not_called()
 
 
 def test_agent_events_return_a_real_sse_response() -> None:
