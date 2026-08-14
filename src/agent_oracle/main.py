@@ -74,8 +74,8 @@ _store, _embedder, _enricher, _watcher = _components
 _mcp = create_mcp_server(_store, _embedder)
 _mcp_app = _mcp.http_app(path="/")
 
-#: Codex-agent summarizer backing POST /api/search/summary.
-_summarizer = SearchSummarizer(base_url=f"http://127.0.0.1:{PORT}")
+#: Direct LLM summarizer backing POST /api/search/summary.
+_summarizer = SearchSummarizer()
 
 
 @asynccontextmanager
@@ -86,7 +86,6 @@ async def _lifespan(app: FastAPI):
         async with _mcp_app.lifespan(app):
             yield
     finally:
-        _summarizer.close()
         _watcher.stop()
 
 
