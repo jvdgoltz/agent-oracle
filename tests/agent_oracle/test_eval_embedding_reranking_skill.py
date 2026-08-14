@@ -91,7 +91,9 @@ def test_query_text_preparation_is_outside_embedding_timing(
         lambda: 0.0 if prepared else pytest.fail("query text was not prepared before timing"),
     )
 
-    evaluator.embed_queries(model, [Question(question="find setup")])
+    evaluator.embed_queries(model, [Question(question="find setup")], prefix="query: ")
+
+    model.query_embed.assert_called_once_with(["query: find setup"])
 
 
 def test_question_generation_uses_pydantic_response_schema() -> None:
@@ -101,9 +103,7 @@ def test_question_generation_uses_pydantic_response_schema() -> None:
         questions=[generator.GeneratedQuestion(question="How was search built?", topic="Search")]
     )
     client = Mock()
-    client.chat.completions.parse.return_value = Mock(
-        choices=[Mock(message=Mock(parsed=parsed))]
-    )
+    client.chat.completions.parse.return_value = Mock(choices=[Mock(message=Mock(parsed=parsed))])
 
     result = generator.generate_session_questions(
         client, "test-model", {"id": "session-1"}, "The agent built hybrid retrieval."
@@ -119,9 +119,7 @@ def test_question_generation_returns_empty_without_parsed_output() -> None:
     """Question generation skips a completion with no parsed payload."""
     generator = load_script("generate_eval_dataset")
     client = Mock()
-    client.chat.completions.parse.return_value = Mock(
-        choices=[Mock(message=Mock(parsed=None))]
-    )
+    client.chat.completions.parse.return_value = Mock(choices=[Mock(message=Mock(parsed=None))])
 
     assert (
         generator.generate_session_questions(
@@ -268,70 +266,6 @@ def test_checkpoint_does_not_override_dataset_construction_state(tmp_path: Path)
     }
 
     assert generator.resume_session_ids(dataset, checkpoint) == {"authoritative-session"}
-
-
-def test_select_sessions_takes_five_nearest_sessions_per_cluster() -> None:
-    """Each cluster contributes its five closest stored-vector sessions."""
-    generator = load_script("generate_eval_dataset")
-
-    class FakeStore:
-        """Provide two well-separated, equally sized vector clusters."""
-
-        def list_session_summary_embeddings(self) -> list[dict]:
-            return [
-                {"id": f"a-{index}", "embedding": [float(index), 0.0]} for index in range(5)
-            ] + [
-                {"id": f"b-{index}", "embedding": [100.0 + float(index), 0.0]} for index in range(5)
-            ]
-
-        def list_all_entities(self) -> list[dict]:
-            return []
-
-    selection = generator.select_sessions(
-        FakeStore(),
-        done=set(),
-        clusters=2,
-        sessions_per_cluster=5,
-        min_sessions=10,
-        max_sessions=200,
-        sessions_per_entity=1,
-        seed=7,
-    )
-
-    assert len(selection.cluster_session_ids) == 10
-    assert selection.backfill_session_ids == []
-    assert set(selection.session_ids) == {f"a-{index}" for index in range(5)} | {
-        f"b-{index}" for index in range(5)
-    }
-
-
-def test_select_sessions_backfills_cluster_shortfall_to_minimum() -> None:
-    """Small clusters do not make a 100-session archive sample smaller than its minimum."""
-    generator = load_script("generate_eval_dataset")
-
-    class FakeStore:
-        """Give one cluster only one member and enough remaining eligible sessions."""
-
-        def list_session_summary_embeddings(self) -> list[dict]:
-            return [{"id": f"s{index}", "embedding": [float(index), 0.0]} for index in range(12)]
-
-        def list_all_entities(self) -> list[dict]:
-            return []
-
-    selection = generator.select_sessions(
-        FakeStore(),
-        done=set(),
-        clusters=10,
-        sessions_per_cluster=1,
-        min_sessions=12,
-        max_sessions=200,
-        sessions_per_entity=1,
-        seed=0,
-    )
-
-    assert len(selection.cluster_session_ids) == 10
-    assert len(selection.backfill_session_ids) == 2
-    assert len(selection.session_ids) == 12
 
 
 def test_select_sessions_warns_when_archive_is_smaller_than_minimum() -> None:

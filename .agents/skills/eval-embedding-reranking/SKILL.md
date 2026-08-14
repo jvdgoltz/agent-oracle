@@ -40,8 +40,9 @@ candidate caches.
    ```
 
    The builder uses `Store` only while constructing the dataset. It never sends
-   every archived session to an LLM: it selects at most 50 new sessions by
-   default (hard maximum 100). It clusters **existing stored session-summary
+   every archived session to an LLM: it selects at least 100 new sessions when
+   available (hard maximum 200). It uses 20 clusters and selects the five
+   sessions nearest each centroid. It clusters **existing stored session-summary
    embeddings** to choose representative sessions, then adds a bounded,
    deduplicated sample for each eligible entity value. It never re-indexes,
    re-embeds, or enriches sessions. Sessions already recorded as processed in
@@ -49,7 +50,17 @@ candidate caches.
 
    Run `--dry-run` first to print the deterministic selection, the maximum LLM
    call estimate, and entity coverage that could not fit under the global cap.
-   Use `--seed`, `--max-sessions`, `--cluster-samples`, and
+   Before entity sampling, preview existing entity normalization:
+
+   ```bash
+   uv run python scripts/normalize_entity_values.py
+   ```
+
+   Run the script with `--write` only after the user confirms the migration.
+   The write creates and verifies a database backup. It updates existing entity
+   strings only. It does not re-index, re-embed, or re-enrich sessions.
+
+   Use `--seed`, `--max-sessions`, `--sessions-per-cluster`, and
    `--sessions-per-entity` to control the selection. The builder prints that
    preview before it creates an OpenAI client. For every selected session, it
    saves filtered searchable messages as corpus passages and asks an LLM to
@@ -90,6 +101,8 @@ candidate caches.
    labeled non-model diagnostic; do not treat it as production search latency.
 
    The report contains only the models requested in the current invocation.
+   Use `--query-prefix` and `--document-prefix` when the model contract requires
+   prefixes. Prefix construction is outside the model-inference timer.
    A dimension mismatch is an adoption concern outside this skill: production
    schema migration and re-embedding must be planned separately.
 

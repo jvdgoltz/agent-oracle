@@ -31,19 +31,26 @@ def load_dataset(path: Path) -> dict:
     return dataset
 
 
-def embed_texts(model: TextEmbedding, texts: list[str]) -> tuple[np.ndarray, float]:
+def embed_texts(
+    model: TextEmbedding, texts: list[str], prefix: str = ""
+) -> tuple[np.ndarray, float]:
     """Embed texts and return vectors plus model-only inference elapsed milliseconds."""
+    prepared_texts = [f"{prefix}{text}" for text in texts]
     vectors: list[np.ndarray] = []
     started = time.perf_counter()
-    for start in range(0, len(texts), EMBED_CHUNK):
-        vectors.extend(model.embed(texts[start : start + EMBED_CHUNK], batch_size=EMBED_BATCH))
+    for start in range(0, len(prepared_texts), EMBED_CHUNK):
+        vectors.extend(
+            model.embed(prepared_texts[start : start + EMBED_CHUNK], batch_size=EMBED_BATCH)
+        )
     elapsed_ms = (time.perf_counter() - started) * 1000
     return np.asarray(vectors, dtype=np.float32), elapsed_ms
 
 
-def embed_queries(model: TextEmbedding, questions: list[dict]) -> tuple[np.ndarray, float]:
+def embed_queries(
+    model: TextEmbedding, questions: list[dict], prefix: str = ""
+) -> tuple[np.ndarray, float]:
     """Embed queries with the model's query encoder and time inference only."""
-    query_texts = [question["question"] for question in questions]
+    query_texts = [f"{prefix}{question['question']}" for question in questions]
     started = time.perf_counter()
     vectors = list(model.query_embed(query_texts))
     return np.asarray(vectors, dtype=np.float32), (time.perf_counter() - started) * 1000
@@ -68,13 +75,17 @@ def ranked_sessions(scores: np.ndarray, corpus: list[dict]) -> list[str]:
     return ranked
 
 
-def evaluate_model(model_name: str, dataset: dict) -> dict:
+def evaluate_model(
+    model_name: str, dataset: dict, document_prefix: str = "", query_prefix: str = ""
+) -> dict:
     """Evaluate one ONNX model; similarity scoring is a non-model diagnostic."""
     corpus = dataset["corpus"]
     questions = dataset["questions"]
     model = TextEmbedding(model_name=model_name, threads=ONNX_THREADS)
-    corpus_vectors, document_ms = embed_texts(model, [passage["content"] for passage in corpus])
-    query_vectors, query_ms = embed_queries(model, questions)
+    corpus_vectors, document_ms = embed_texts(
+        model, [passage["content"] for passage in corpus], prefix=document_prefix
+    )
+    query_vectors, query_ms = embed_queries(model, questions, prefix=query_prefix)
     if corpus_vectors.ndim != 2 or query_vectors.ndim != 2:
         raise ValueError("Embedding model returned invalid vector shapes")
     if corpus_vectors.shape[1] != query_vectors.shape[1]:
@@ -139,10 +150,20 @@ def main() -> None:
     parser.add_argument("--models", nargs="+", default=["BAAI/bge-small-en-v1.5"])
     parser.add_argument("--dataset", type=Path, default=EVALS_DIR / "dataset.json")
     parser.add_argument("--report", type=Path, default=None)
+    parser.add_argument("--document-prefix", default="")
+    parser.add_argument("--query-prefix", default="")
     args = parser.parse_args()
 
     dataset = load_dataset(args.dataset)
-    results = [evaluate_model(model_name, dataset) for model_name in args.models]
+    results = [
+        evaluate_model(
+            model_name,
+            dataset,
+            document_prefix=args.document_prefix,
+            query_prefix=args.query_prefix,
+        )
+        for model_name in args.models
+    ]
     report = format_report(dataset, results)
     print("\n" + report)
     report_path = args.report or args.dataset.with_name("report_embeddings.md")
