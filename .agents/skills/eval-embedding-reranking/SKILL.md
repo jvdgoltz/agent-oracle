@@ -39,15 +39,28 @@ candidate caches.
    uv run python .agents/skills/eval-embedding-reranking/python/generate_eval_dataset.py
    ```
 
-   The builder uses `Store` only while constructing the dataset. For each new
-   session, it saves filtered searchable messages as corpus passages and asks an
-   LLM to create 1–3 recall-style paraphrase questions. It incrementally handles
-   new sessions and preserves the existing artifact's corpus and questions.
+   The builder uses `Store` only while constructing the dataset. It never sends
+   every archived session to an LLM: it selects at most 50 new sessions by
+   default (hard maximum 100). It clusters **existing stored session-summary
+   embeddings** to choose representative sessions, then adds a bounded,
+   deduplicated sample for each eligible entity value. It never re-indexes,
+   re-embeds, or enriches sessions. Sessions already recorded as processed in
+   the artifact are excluded before selection.
+
+   Run `--dry-run` first to print the deterministic selection, the maximum LLM
+   call estimate, and entity coverage that could not fit under the global cap.
+   Use `--seed`, `--max-sessions`, `--cluster-samples`, and
+   `--sessions-per-entity` to control the selection. The builder prints that
+   preview before it creates an OpenAI client. For every selected session, it
+   saves filtered searchable messages as corpus passages and asks an LLM to
+   create 1–3 recall-style paraphrase questions. It incrementally handles new
+   sessions and preserves the existing artifact's corpus and questions.
 
    Use `--reset` to deliberately start over. It removes that output file and
-   its matching checkpoint before generation, so regenerated questions cannot
-   be appended to prior ones or duplicated. `--out` selects a separate dataset
-   and creates a matching checkpoint in the same directory.
+   any legacy matching checkpoint before generation, so regenerated questions
+   cannot be appended to prior ones or duplicated. `--out` selects a separate
+   dataset. The dataset records its processed session IDs, including sessions
+   that produced no accepted questions.
 
    This is a **synthetic paraphrase** evaluation, not leakage-free independently
    authored ground truth: the generator sees the target transcript. Its
@@ -122,4 +135,7 @@ information beyond MRR and Recall, so they are not computed.
   caches while evaluating a constructed dataset.
 - Do not call the dataset leakage-free; it is LLM-generated from its gold
   transcript and requires spot checks.
+- Do not send all archived sessions to the LLM. Use the bounded summary-vector
+  clustering and entity coverage selection; do not re-index, re-embed, or
+  enrich the archive to construct evaluation data.
 - Do not commit session content; the eval directory is outside the repository.

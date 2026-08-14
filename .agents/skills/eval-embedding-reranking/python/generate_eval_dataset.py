@@ -7,21 +7,28 @@ import argparse
 import hashlib
 import json
 import logging
+import struct
 from pathlib import Path
 
+import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from openai import OpenAI
 
+from agent_oracle.eval_dataset import SCHEMA_VERSION, dataset_fingerprint
 from agent_oracle.store import Store
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
 EVALS_DIR = Path.home() / ".agent-oracle" / "evals"
 DEFAULT_DB = Path.home() / ".agent-oracle" / "index.db"
 DEFAULT_MODEL = "gpt-5.6-luna"
 CONTEXT_LIMIT = 8000
 MAX_QUOTED_RUN = 5
+DEFAULT_MAX_SESSIONS = 50
+HARD_MAX_SESSIONS = 100
+DEFAULT_CLUSTER_SAMPLES = 25
+DEFAULT_SESSIONS_PER_ENTITY = 1
+KMEANS_ITERATIONS = 10
 
 PROMPT = """\
 You are given a sample of a coding-agent session transcript (messages between a \
@@ -40,27 +47,141 @@ Transcript:
 """
 
 
-def dataset_fingerprint(dataset: dict) -> str:
-    """Return a stable fingerprint of the portable corpus and question set."""
-    payload = {
-        "schema_version": dataset["schema_version"],
-        "questions": dataset["questions"],
-        "corpus": dataset["corpus"],
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
+class SessionSelection:
+    """Bounded selected sessions and entity coverage diagnostics."""
+
+    def __init__(
+        self,
+        session_ids: list[str],
+        covered_entities: list[str],
+        uncovered_entities: list[str],
+    ) -> None:
+        self.session_ids = session_ids
+        self.covered_entities = covered_entities
+        self.uncovered_entities = uncovered_entities
 
 
-def load_checkpoint(path: Path) -> set[str]:
-    """Return session ids already processed, from the checkpoint file."""
-    if path.is_file():
-        return set(json.loads(path.read_text())["done"])
-    return set()
+def stable_rank(seed: int, *parts: str) -> str:
+    """Return a stable seeded tie-breaker independent of database row ordering."""
+    payload = ":".join((str(seed), *parts)).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
-def save_checkpoint(path: Path, done: set[str]) -> None:
-    """Persist processed session ids while a dataset build is in progress."""
-    path.write_text(json.dumps({"done": sorted(done)}))
+def cluster_representatives(rows: list[dict], count: int, seed: int) -> list[str]:
+    """Choose deterministic k-means representatives from stored summary vectors."""
+    if not rows or count <= 0:
+        return []
+    ordered = sorted(rows, key=lambda row: stable_rank(seed, row["id"]))
+    vectors = np.asarray([row["embedding"] for row in ordered], dtype=np.float32)
+    cluster_count = min(count, len(ordered))
+    centers = vectors[:cluster_count].copy()
+    assignments = np.zeros(len(ordered), dtype=np.int64)
+    for _ in range(KMEANS_ITERATIONS):
+        distances = ((vectors[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+        assignments = distances.argmin(axis=1)
+        updated = centers.copy()
+        for cluster in range(cluster_count):
+            members = vectors[assignments == cluster]
+            if len(members):
+                updated[cluster] = members.mean(axis=0)
+        if np.array_equal(updated, centers):
+            break
+        centers = updated
+    representatives = []
+    for cluster in range(cluster_count):
+        members = np.flatnonzero(assignments == cluster)
+        if len(members) == 0:
+            continue
+        distances = ((vectors[members] - centers[cluster]) ** 2).sum(axis=1)
+        representative_position = min(
+            range(len(members)),
+            key=lambda position: (
+                distances[position],
+                stable_rank(seed, ordered[members[position]]["id"]),
+            ),
+        )
+        representatives.append(ordered[members[representative_position]]["id"])
+    return representatives
+
+
+def list_session_summary_embeddings(store: Store) -> list[dict]:
+    """Read existing session-summary vectors for offline sampling."""
+    reader = getattr(store, "list_session_summary_embeddings", None)
+    if reader is not None:
+        return reader()
+    rows = store.conn.execute(
+        "SELECT s.id, v.embedding FROM vec_sessions v "
+        "JOIN sessions s ON s.rowid = v.rowid ORDER BY s.id"
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "embedding": list(struct.unpack(f"<{len(row['embedding']) // 4}f", row["embedding"])),
+        }
+        for row in rows
+    ]
+
+
+def list_all_entities(store: Store) -> list[dict]:
+    """Read all entity associations for bounded coverage sampling."""
+    reader = getattr(store, "list_all_entities", None)
+    if reader is not None:
+        return reader()
+    rows = store.conn.execute(
+        "SELECT session_id, entity_type, entity_value FROM entities "
+        "ORDER BY entity_type, entity_value, session_id"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def select_sessions(
+    store: Store,
+    *,
+    done: set[str],
+    max_sessions: int,
+    cluster_samples: int,
+    sessions_per_entity: int,
+    seed: int,
+) -> SessionSelection:
+    """Select a deduplicated bounded mix of clustered and entity-covered sessions."""
+    candidates = [row for row in list_session_summary_embeddings(store) if row["id"] not in done]
+    candidate_ids = {row["id"] for row in candidates}
+    selected = cluster_representatives(candidates, min(cluster_samples, max_sessions), seed)
+    entity_sessions: dict[str, list[str]] = {}
+    for entity in list_all_entities(store):
+        session_id = entity["session_id"]
+        if session_id not in candidate_ids:
+            continue
+        entity_key = f"{entity['entity_type']}:{entity['entity_value']}"
+        entity_sessions.setdefault(entity_key, []).append(session_id)
+    covered = []
+    for entity_key in sorted(entity_sessions, key=lambda key: stable_rank(seed, key)):
+        candidates_for_entity = sorted(
+            set(entity_sessions[entity_key]),
+            key=lambda session_id: stable_rank(seed, entity_key, session_id),
+        )
+        for session_id in candidates_for_entity[:sessions_per_entity]:
+            if len(selected) >= max_sessions:
+                break
+            if session_id not in selected:
+                selected.append(session_id)
+        if any(session_id in selected for session_id in candidates_for_entity):
+            covered.append(entity_key)
+    selected = selected[:max_sessions]
+    uncovered = sorted(set(entity_sessions) - set(covered))
+    return SessionSelection(selected, sorted(covered), uncovered)
+
+
+def print_selection_preview(selection: SessionSelection, available: int) -> None:
+    """Print bounded generation work before initializing the OpenAI client."""
+    print(f"Selected {len(selection.session_ids)} of {available} eligible sessions.")
+    call_count = len(selection.session_ids)
+    print(f"Maximum LLM calls: {call_count} (up to {call_count * 3} questions).")
+    covered = len(selection.covered_entities)
+    uncovered = len(selection.uncovered_entities)
+    print(f"Entity coverage: {covered} covered, {uncovered} uncovered.")
+    if selection.uncovered_entities:
+        print("Uncovered entities: " + ", ".join(selection.uncovered_entities))
 
 
 def reset_generation_state(out: Path, checkpoint: Path) -> None:
@@ -73,7 +194,12 @@ def reset_generation_state(out: Path, checkpoint: Path) -> None:
 def load_existing_dataset(path: Path) -> dict:
     """Load a prior portable dataset, or return an empty dataset state."""
     if not path.is_file():
-        return {"schema_version": SCHEMA_VERSION, "questions": [], "corpus": []}
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "questions": [],
+            "corpus": [],
+            "processed_session_ids": [],
+        }
     dataset = json.loads(path.read_text())
     if dataset.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"Unsupported dataset schema in {path}; rerun with --reset")
@@ -81,17 +207,27 @@ def load_existing_dataset(path: Path) -> dict:
         dataset.get("corpus"), list
     ):
         raise ValueError(f"Invalid dataset in {path}; rerun with --reset")
+    processed = dataset.get("processed_session_ids")
+    if processed is not None and (
+        not isinstance(processed, list)
+        or not all(isinstance(session_id, str) for session_id in processed)
+    ):
+        raise ValueError(f"Invalid processed session ids in {path}; rerun with --reset")
     return dataset
 
 
 def processed_session_ids(dataset: dict) -> set[str]:
-    """Return session ids already represented by the portable dataset."""
-    return {
-        item["session_id"]
-        for key in ("questions", "corpus")
-        for item in dataset[key]
-        if item.get("session_id")
-    }
+    """Return generated session ids, preserving legacy question-only state."""
+    explicit = dataset.get("processed_session_ids")
+    if explicit is not None:
+        return set(explicit)
+    return {item["session_id"] for item in dataset["questions"] if item.get("session_id")}
+
+
+def resume_session_ids(dataset: dict, checkpoint: Path) -> set[str]:
+    """Return dataset construction state without trusting legacy checkpoints."""
+    del checkpoint
+    return processed_session_ids(dataset)
 
 
 def searchable_messages(session: dict) -> list[dict]:
@@ -156,46 +292,69 @@ def next_question_number(questions: list[dict]) -> int:
     return max(numbers, default=-1) + 1
 
 
-def main() -> None:
-    """Build or incrementally extend one self-contained eval dataset."""
+def parse_args() -> argparse.Namespace:
+    """Parse and validate bounded dataset-generation arguments."""
     parser = argparse.ArgumentParser(description="Generate a synthetic portable eval dataset")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--out", type=Path, default=EVALS_DIR / "dataset.json")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
-        "--limit", type=int, default=0, help="Max new sessions to process (0 = all)"
+        "--max-sessions",
+        type=int,
+        default=DEFAULT_MAX_SESSIONS,
+        help=(
+            f"Max new sessions sent to the LLM (default {DEFAULT_MAX_SESSIONS}; "
+            f"hard max {HARD_MAX_SESSIONS})"
+        ),
+    )
+    parser.add_argument(
+        "--cluster-samples",
+        type=int,
+        default=DEFAULT_CLUSTER_SAMPLES,
+        help="Max representative sessions selected by summary-embedding clustering",
+    )
+    parser.add_argument(
+        "--sessions-per-entity",
+        type=int,
+        default=DEFAULT_SESSIONS_PER_ENTITY,
+        help="Max eligible sessions added for each entity value",
+    )
+    parser.add_argument("--seed", type=int, default=0, help="Deterministic selection seed")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview selection without creating an OpenAI client"
     )
     parser.add_argument(
         "--reset", action="store_true", help="Discard this output and checkpoint first"
     )
     args = parser.parse_args()
 
-    load_dotenv(find_dotenv(usecwd=True), override=True)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = args.out.parent / f".{args.out.stem}.checkpoint.json"
-    if args.reset:
-        reset_generation_state(args.out, checkpoint_path)
-    dataset = load_existing_dataset(args.out)
-    done = load_checkpoint(checkpoint_path) | processed_session_ids(dataset)
-    questions = dataset["questions"]
+    if not 1 <= args.max_sessions <= HARD_MAX_SESSIONS:
+        parser.error(f"--max-sessions must be between 1 and {HARD_MAX_SESSIONS}")
+    if args.cluster_samples < 0:
+        parser.error("--cluster-samples must be non-negative")
+    if args.sessions_per_entity < 1:
+        parser.error("--sessions-per-entity must be at least 1")
+    return args
+
+
+def generate_selected_sessions(
+    store: Store,
+    selection: SessionSelection,
+    client: OpenAI,
+    model: str,
+    questions: list[dict],
+    done: set[str],
+) -> list[dict]:
+    """Generate questions and return sessions included in this build."""
     question_number = next_question_number(questions)
-
-    store = Store(args.db)
-    all_summaries = store.list_sessions(limit=100_000)
-    pending = [summary for summary in all_summaries if summary["id"] not in done]
-    if args.limit:
-        pending = pending[: args.limit]
-    logger.info("%d new sessions to process (%d already done)", len(pending), len(done))
-
-    client = OpenAI()
-    for index, summary in enumerate(pending):
-        session = store.get_session(summary["id"])
+    selected_sessions = []
+    for session_id in selection.session_ids:
+        session = store.get_session(session_id)
         if session is None:
             continue
+        selected_sessions.append(session)
         messages = searchable_messages(session)
-        generated = generate_session_questions(
-            client, args.model, session, sample_context(messages)
-        )
+        generated = generate_session_questions(client, model, session, sample_context(messages))
         for item in generated:
             questions.append(
                 {
@@ -208,24 +367,52 @@ def main() -> None:
             )
             question_number += 1
         done.add(session["id"])
-        if (index + 1) % 25 == 0 or index + 1 == len(pending):
-            save_checkpoint(checkpoint_path, done)
+    return selected_sessions
+
+
+def main() -> None:
+    """Build or incrementally extend one self-contained eval dataset."""
+    args = parse_args()
+
+    load_dotenv(find_dotenv(usecwd=True), override=True)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = args.out.parent / f".{args.out.stem}.checkpoint.json"
+    if args.reset:
+        reset_generation_state(args.out, checkpoint_path)
+    dataset = load_existing_dataset(args.out)
+    done = resume_session_ids(dataset, checkpoint_path)
+    questions = dataset["questions"]
+
+    store = Store(args.db)
+    available = [row for row in list_session_summary_embeddings(store) if row["id"] not in done]
+    selection = select_sessions(
+        store,
+        done=done,
+        max_sessions=args.max_sessions,
+        cluster_samples=args.cluster_samples,
+        sessions_per_entity=args.sessions_per_entity,
+        seed=args.seed,
+    )
+    print_selection_preview(selection, len(available))
+    if args.dry_run:
+        return
+    logger.info("%d new sessions selected (%d already done)", len(selection.session_ids), len(done))
+
+    selected_sessions = generate_selected_sessions(
+        store, selection, OpenAI(), args.model, questions, done
+    )
 
     # The dataset carries the exact passages used by both evaluators. Store is
     # needed only for this construction step, never when running the eval.
     corpus_by_id = {passage["id"]: passage for passage in dataset["corpus"]}
-    for summary in all_summaries:
-        session = store.get_session(summary["id"])
-        if session is not None:
-            corpus_by_id.update(
-                {passage["id"]: passage for passage in searchable_messages(session)}
-            )
+    for session in selected_sessions:
+        corpus_by_id.update({passage["id"]: passage for passage in searchable_messages(session)})
     dataset["corpus"] = sorted(corpus_by_id.values(), key=lambda passage: passage["id"])
     dataset["topics"] = sorted({question["topic"] for question in questions})
     dataset["generator"] = {"model": args.model, "synthetic": True}
+    dataset["processed_session_ids"] = sorted(done)
     dataset["fingerprint"] = dataset_fingerprint(dataset)
     args.out.write_text(json.dumps(dataset, indent=2) + "\n")
-    save_checkpoint(checkpoint_path, done)
 
     print(f"Wrote {len(questions)} questions and {len(dataset['corpus'])} passages to {args.out}")
     print("Synthetic paraphrase dataset: review samples; it is not independent ground truth.")

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import time
@@ -14,9 +13,10 @@ import numpy as np
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
+from agent_oracle.eval_dataset import validate_dataset
+
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
 EVALS_DIR = Path.home() / ".agent-oracle" / "evals"
 CANDIDATE_K = 50
 ONNX_THREADS = 2
@@ -28,35 +28,6 @@ def load_dataset(path: Path) -> dict:
     dataset = json.loads(path.read_text())
     validate_dataset(dataset)
     return dataset
-
-
-def validate_dataset(dataset: dict) -> None:
-    """Require a schema-versioned corpus containing every gold session."""
-    if dataset.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError("Unsupported eval dataset schema version")
-    if not dataset.get("fingerprint"):
-        raise ValueError("Eval dataset has no fingerprint")
-    questions = dataset.get("questions")
-    corpus = dataset.get("corpus")
-    if not isinstance(questions, list) or not isinstance(corpus, list):
-        raise ValueError("Eval dataset requires questions and corpus lists")
-    if dataset["fingerprint"] != dataset_fingerprint(dataset):
-        raise ValueError("Eval dataset fingerprint does not match its contents")
-    sessions = {passage.get("session_id") for passage in corpus}
-    for question in questions:
-        if question.get("session_id") not in sessions:
-            raise ValueError(f"Question {question.get('id')} has no gold session passage in corpus")
-
-
-def dataset_fingerprint(dataset: dict) -> str:
-    """Return the generator-compatible fingerprint for portable dataset contents."""
-    payload = {
-        "schema_version": dataset["schema_version"],
-        "questions": dataset["questions"],
-        "corpus": dataset["corpus"],
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def normalize(matrix: np.ndarray) -> np.ndarray:
