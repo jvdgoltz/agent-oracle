@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 """Build a portable synthetic retrieval evaluation dataset from archived sessions."""
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json
@@ -10,9 +8,13 @@ import logging
 import struct
 from pathlib import Path
 
-import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from openai import OpenAI
+from pydantic import BaseModel
+from selection import (  # deptry: ignore[DEP001]
+    cluster_nearest_sessions,
+    farthest_first_backfill,
+)
 
 from agent_oracle.eval_dataset import SCHEMA_VERSION, dataset_fingerprint
 from agent_oracle.store import Store
@@ -24,11 +26,12 @@ DEFAULT_DB = Path.home() / ".agent-oracle" / "index.db"
 DEFAULT_MODEL = "gpt-5.6-luna"
 CONTEXT_LIMIT = 8000
 MAX_QUOTED_RUN = 5
-DEFAULT_MAX_SESSIONS = 50
-HARD_MAX_SESSIONS = 100
-DEFAULT_CLUSTER_SAMPLES = 25
+DEFAULT_CLUSTERS = 20
+DEFAULT_SESSIONS_PER_CLUSTER = 5
+DEFAULT_MIN_SESSIONS = 100
+DEFAULT_MAX_SESSIONS = 200
+HARD_MAX_SESSIONS = 200
 DEFAULT_SESSIONS_PER_ENTITY = 1
-KMEANS_ITERATIONS = 10
 
 PROMPT = """\
 You are given a sample of a coding-agent session transcript (messages between a \
@@ -41,10 +44,21 @@ Generate 1-3 questions the developer might later ask to find this session again 
 - Write like a real recall attempt, not a summary.
 - Assign each question one short topic label.
 
-Return ONLY JSON like: {{"questions": [{{"question": "...", "topic": "..."}}]}}
-
 Transcript:
 """
+
+
+class GeneratedQuestion(BaseModel):
+    """Define one synthetic retrieval question in the LLM output."""
+
+    question: str
+    topic: str
+
+
+class GeneratedQuestionsOutput(BaseModel):
+    """Define the structured output requested from the question-generation LLM."""
+
+    questions: list[GeneratedQuestion]
 
 
 class SessionSelection:
@@ -53,55 +67,28 @@ class SessionSelection:
     def __init__(
         self,
         session_ids: list[str],
+        cluster_session_ids: list[str],
+        backfill_session_ids: list[str],
+        entity_session_ids: list[str],
         covered_entities: list[str],
+        already_covered_entities: list[str],
         uncovered_entities: list[str],
+        minimum_shortfall: int,
     ) -> None:
         self.session_ids = session_ids
+        self.cluster_session_ids = cluster_session_ids
+        self.backfill_session_ids = backfill_session_ids
+        self.entity_session_ids = entity_session_ids
         self.covered_entities = covered_entities
+        self.already_covered_entities = already_covered_entities
         self.uncovered_entities = uncovered_entities
+        self.minimum_shortfall = minimum_shortfall
 
 
 def stable_rank(seed: int, *parts: str) -> str:
     """Return a stable seeded tie-breaker independent of database row ordering."""
     payload = ":".join((str(seed), *parts)).encode()
     return hashlib.sha256(payload).hexdigest()
-
-
-def cluster_representatives(rows: list[dict], count: int, seed: int) -> list[str]:
-    """Choose deterministic k-means representatives from stored summary vectors."""
-    if not rows or count <= 0:
-        return []
-    ordered = sorted(rows, key=lambda row: stable_rank(seed, row["id"]))
-    vectors = np.asarray([row["embedding"] for row in ordered], dtype=np.float32)
-    cluster_count = min(count, len(ordered))
-    centers = vectors[:cluster_count].copy()
-    assignments = np.zeros(len(ordered), dtype=np.int64)
-    for _ in range(KMEANS_ITERATIONS):
-        distances = ((vectors[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
-        assignments = distances.argmin(axis=1)
-        updated = centers.copy()
-        for cluster in range(cluster_count):
-            members = vectors[assignments == cluster]
-            if len(members):
-                updated[cluster] = members.mean(axis=0)
-        if np.array_equal(updated, centers):
-            break
-        centers = updated
-    representatives = []
-    for cluster in range(cluster_count):
-        members = np.flatnonzero(assignments == cluster)
-        if len(members) == 0:
-            continue
-        distances = ((vectors[members] - centers[cluster]) ** 2).sum(axis=1)
-        representative_position = min(
-            range(len(members)),
-            key=lambda position: (
-                distances[position],
-                stable_rank(seed, ordered[members[position]]["id"]),
-            ),
-        )
-        representatives.append(ordered[members[representative_position]]["id"])
-    return representatives
 
 
 def list_session_summary_embeddings(store: Store) -> list[dict]:
@@ -139,47 +126,99 @@ def select_sessions(
     *,
     done: set[str],
     max_sessions: int,
-    cluster_samples: int,
+    clusters: int,
+    sessions_per_cluster: int,
+    min_sessions: int,
     sessions_per_entity: int,
     seed: int,
 ) -> SessionSelection:
     """Select a deduplicated bounded mix of clustered and entity-covered sessions."""
     candidates = [row for row in list_session_summary_embeddings(store) if row["id"] not in done]
     candidate_ids = {row["id"] for row in candidates}
-    selected = cluster_representatives(candidates, min(cluster_samples, max_sessions), seed)
-    entity_sessions: dict[str, list[str]] = {}
+    cluster_session_ids = cluster_nearest_sessions(
+        candidates, clusters, sessions_per_cluster, seed
+    )[:max_sessions]
+    backfill_session_ids = farthest_first_backfill(
+        candidates,
+        cluster_session_ids,
+        min(min_sessions, max_sessions) - len(cluster_session_ids),
+        seed,
+    )
+    selected = cluster_session_ids + backfill_session_ids
+    entity_sessions: dict[str, set[str]] = {}
     for entity in list_all_entities(store):
         session_id = entity["session_id"]
         if session_id not in candidate_ids:
             continue
         entity_key = f"{entity['entity_type']}:{entity['entity_value']}"
-        entity_sessions.setdefault(entity_key, []).append(session_id)
+        entity_sessions.setdefault(entity_key, set()).add(session_id)
     covered = []
-    for entity_key in sorted(entity_sessions, key=lambda key: stable_rank(seed, key)):
+    already_covered = []
+    uncovered = []
+    entity_session_ids = []
+    entity_keys = sorted(
+        entity_sessions,
+        key=lambda key: (-len(entity_sessions[key]), stable_rank(seed, key)),
+    )
+    for entity_key in entity_keys:
         candidates_for_entity = sorted(
-            set(entity_sessions[entity_key]),
+            entity_sessions[entity_key],
             key=lambda session_id: stable_rank(seed, entity_key, session_id),
         )
-        for session_id in candidates_for_entity[:sessions_per_entity]:
-            if len(selected) >= max_sessions:
-                break
-            if session_id not in selected:
-                selected.append(session_id)
-        if any(session_id in selected for session_id in candidates_for_entity):
-            covered.append(entity_key)
+        unselected = [
+            session_id for session_id in candidates_for_entity if session_id not in selected
+        ]
+        if not unselected:
+            already_covered.append(entity_key)
+            continue
+        if len(selected) >= max_sessions:
+            uncovered.append(entity_key)
+            continue
+        additions = unselected[:sessions_per_entity]
+        additions = additions[: max_sessions - len(selected)]
+        if not additions:
+            uncovered.append(entity_key)
+            continue
+        selected.extend(additions)
+        entity_session_ids.extend(additions)
+        covered.append(entity_key)
     selected = selected[:max_sessions]
-    uncovered = sorted(set(entity_sessions) - set(covered))
-    return SessionSelection(selected, sorted(covered), uncovered)
+    return SessionSelection(
+        selected,
+        cluster_session_ids,
+        backfill_session_ids,
+        entity_session_ids,
+        covered,
+        already_covered,
+        uncovered,
+        max(0, min_sessions - len(candidates)),
+    )
 
 
 def print_selection_preview(selection: SessionSelection, available: int) -> None:
     """Print bounded generation work before initializing the OpenAI client."""
     print(f"Selected {len(selection.session_ids)} of {available} eligible sessions.")
+    print(
+        "Selection: "
+        f"{len(selection.cluster_session_ids)} cluster-derived, "
+        f"{len(selection.backfill_session_ids)} backfill, "
+        f"{len(selection.entity_session_ids)} entity-added."
+    )
+    if selection.minimum_shortfall:
+        print(
+            "Warning: only "
+            f"{available} eligible embedded sessions; short of the minimum by "
+            f"{selection.minimum_shortfall}."
+        )
     call_count = len(selection.session_ids)
     print(f"Maximum LLM calls: {call_count} (up to {call_count * 3} questions).")
     covered = len(selection.covered_entities)
+    already_covered = len(selection.already_covered_entities)
     uncovered = len(selection.uncovered_entities)
-    print(f"Entity coverage: {covered} covered, {uncovered} uncovered.")
+    print(
+        "Entity coverage: "
+        f"{covered} added, {already_covered} already covered, {uncovered} uncovered."
+    )
     if selection.uncovered_entities:
         print("Uncovered entities: " + ", ".join(selection.uncovered_entities))
 
@@ -267,20 +306,19 @@ def generate_session_questions(
     """Ask the LLM for synthetic paraphrase questions about one session."""
     if not context.strip():
         return []
-    response = client.chat.completions.create(
+    response = client.chat.completions.parse(
         model=model,
-        response_format={"type": "json_object"},
+        response_format=GeneratedQuestionsOutput,
         messages=[{"role": "user", "content": PROMPT + context}],
     )
-    try:
-        candidates = json.loads(response.choices[0].message.content or "{}").get("questions", [])
-    except json.JSONDecodeError:
-        logger.warning("Unparseable response for session %s; skipped", session["id"])
+    parsed = response.choices[0].message.parsed
+    if parsed is None:
+        logger.warning("No parsed response for session %s; skipped", session["id"])
         return []
     accepted = []
-    for item in candidates:
-        question = str(item.get("question", "")).strip()
-        topic = str(item.get("topic", "general")).strip().lower() or "general"
+    for item in parsed.questions:
+        question = item.question.strip()
+        topic = item.topic.strip().lower() or "general"
         if question and longest_quoted_run(question, context) <= MAX_QUOTED_RUN:
             accepted.append({"question": question, "topic": topic})
     return accepted
@@ -307,11 +345,13 @@ def parse_args() -> argparse.Namespace:
             f"hard max {HARD_MAX_SESSIONS})"
         ),
     )
+    parser.add_argument("--clusters", type=int, default=DEFAULT_CLUSTERS)
+    parser.add_argument("--sessions-per-cluster", type=int, default=DEFAULT_SESSIONS_PER_CLUSTER)
     parser.add_argument(
-        "--cluster-samples",
+        "--min-sessions",
         type=int,
-        default=DEFAULT_CLUSTER_SAMPLES,
-        help="Max representative sessions selected by summary-embedding clustering",
+        default=DEFAULT_MIN_SESSIONS,
+        help="Minimum cluster-derived and backfill sessions before entity sampling",
     )
     parser.add_argument(
         "--sessions-per-entity",
@@ -330,8 +370,12 @@ def parse_args() -> argparse.Namespace:
 
     if not 1 <= args.max_sessions <= HARD_MAX_SESSIONS:
         parser.error(f"--max-sessions must be between 1 and {HARD_MAX_SESSIONS}")
-    if args.cluster_samples < 0:
-        parser.error("--cluster-samples must be non-negative")
+    if args.clusters < 1:
+        parser.error("--clusters must be at least 1")
+    if args.sessions_per_cluster < 1:
+        parser.error("--sessions-per-cluster must be at least 1")
+    if not 1 <= args.min_sessions <= args.max_sessions:
+        parser.error("--min-sessions must be between 1 and --max-sessions")
     if args.sessions_per_entity < 1:
         parser.error("--sessions-per-entity must be at least 1")
     return args
@@ -389,7 +433,9 @@ def main() -> None:
         store,
         done=done,
         max_sessions=args.max_sessions,
-        cluster_samples=args.cluster_samples,
+        clusters=args.clusters,
+        sessions_per_cluster=args.sessions_per_cluster,
+        min_sessions=args.min_sessions,
         sessions_per_entity=args.sessions_per_entity,
         seed=args.seed,
     )

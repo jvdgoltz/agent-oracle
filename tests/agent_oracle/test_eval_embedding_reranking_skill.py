@@ -94,6 +94,43 @@ def test_query_text_preparation_is_outside_embedding_timing(
     evaluator.embed_queries(model, [Question(question="find setup")])
 
 
+def test_question_generation_uses_pydantic_response_schema() -> None:
+    """Question generation supplies its Pydantic model to the LLM API."""
+    generator = load_script("generate_eval_dataset")
+    parsed = generator.GeneratedQuestionsOutput(
+        questions=[generator.GeneratedQuestion(question="How was search built?", topic="Search")]
+    )
+    client = Mock()
+    client.chat.completions.parse.return_value = Mock(
+        choices=[Mock(message=Mock(parsed=parsed))]
+    )
+
+    result = generator.generate_session_questions(
+        client, "test-model", {"id": "session-1"}, "The agent built hybrid retrieval."
+    )
+
+    assert result == [{"question": "How was search built?", "topic": "search"}]
+    assert client.chat.completions.parse.call_args.kwargs["response_format"] is (
+        generator.GeneratedQuestionsOutput
+    )
+
+
+def test_question_generation_returns_empty_without_parsed_output() -> None:
+    """Question generation skips a completion with no parsed payload."""
+    generator = load_script("generate_eval_dataset")
+    client = Mock()
+    client.chat.completions.parse.return_value = Mock(
+        choices=[Mock(message=Mock(parsed=None))]
+    )
+
+    assert (
+        generator.generate_session_questions(
+            client, "test-model", {"id": "session-1"}, "Some context"
+        )
+        == []
+    )
+
+
 def test_reset_discards_existing_questions_and_checkpoint(tmp_path: Path) -> None:
     """Reset makes a fresh dataset rather than appending duplicate questions."""
     generator = load_script("generate_eval_dataset")
@@ -233,37 +270,133 @@ def test_checkpoint_does_not_override_dataset_construction_state(tmp_path: Path)
     assert generator.resume_session_ids(dataset, checkpoint) == {"authoritative-session"}
 
 
-def test_select_sessions_is_bounded_and_covers_entities_when_possible() -> None:
-    """Selection combines summary clusters and entity coverage without duplicates."""
+def test_select_sessions_takes_five_nearest_sessions_per_cluster() -> None:
+    """Each cluster contributes its five closest stored-vector sessions."""
     generator = load_script("generate_eval_dataset")
 
     class FakeStore:
-        """Provide stored summary vectors and entity rows without a database."""
+        """Provide two well-separated, equally sized vector clusters."""
 
         def list_session_summary_embeddings(self) -> list[dict]:
             return [
-                {"id": "done", "embedding": [0.0, 0.0]},
-                {"id": "cluster-a", "embedding": [0.1, 0.0]},
-                {"id": "cluster-b", "embedding": [10.0, 10.0]},
-                {"id": "entity-only", "embedding": [10.1, 10.0]},
+                {"id": f"a-{index}", "embedding": [float(index), 0.0]} for index in range(5)
+            ] + [
+                {"id": f"b-{index}", "embedding": [100.0 + float(index), 0.0]} for index in range(5)
+            ]
+
+        def list_all_entities(self) -> list[dict]:
+            return []
+
+    selection = generator.select_sessions(
+        FakeStore(),
+        done=set(),
+        clusters=2,
+        sessions_per_cluster=5,
+        min_sessions=10,
+        max_sessions=200,
+        sessions_per_entity=1,
+        seed=7,
+    )
+
+    assert len(selection.cluster_session_ids) == 10
+    assert selection.backfill_session_ids == []
+    assert set(selection.session_ids) == {f"a-{index}" for index in range(5)} | {
+        f"b-{index}" for index in range(5)
+    }
+
+
+def test_select_sessions_backfills_cluster_shortfall_to_minimum() -> None:
+    """Small clusters do not make a 100-session archive sample smaller than its minimum."""
+    generator = load_script("generate_eval_dataset")
+
+    class FakeStore:
+        """Give one cluster only one member and enough remaining eligible sessions."""
+
+        def list_session_summary_embeddings(self) -> list[dict]:
+            return [{"id": f"s{index}", "embedding": [float(index), 0.0]} for index in range(12)]
+
+        def list_all_entities(self) -> list[dict]:
+            return []
+
+    selection = generator.select_sessions(
+        FakeStore(),
+        done=set(),
+        clusters=10,
+        sessions_per_cluster=1,
+        min_sessions=12,
+        max_sessions=200,
+        sessions_per_entity=1,
+        seed=0,
+    )
+
+    assert len(selection.cluster_session_ids) == 10
+    assert len(selection.backfill_session_ids) == 2
+    assert len(selection.session_ids) == 12
+
+
+def test_select_sessions_warns_when_archive_is_smaller_than_minimum() -> None:
+    """All eligible sessions are selected when the minimum cannot be reached."""
+    generator = load_script("generate_eval_dataset")
+
+    class FakeStore:
+        """Provide fewer embedded sessions than the requested minimum."""
+
+        def list_session_summary_embeddings(self) -> list[dict]:
+            return [{"id": f"s{index}", "embedding": [float(index), 0.0]} for index in range(3)]
+
+        def list_all_entities(self) -> list[dict]:
+            return []
+
+    selection = generator.select_sessions(
+        FakeStore(),
+        done=set(),
+        clusters=20,
+        sessions_per_cluster=5,
+        min_sessions=100,
+        max_sessions=200,
+        sessions_per_entity=1,
+        seed=0,
+    )
+
+    assert len(selection.session_ids) == 3
+    assert selection.minimum_shortfall == 97
+
+
+def test_select_sessions_deduplicates_entity_additions() -> None:
+    """Entity candidates already selected from clusters do not consume the cap twice."""
+    generator = load_script("generate_eval_dataset")
+
+    class FakeStore:
+        """Provide one clustered session and one distinct entity session."""
+
+        def list_session_summary_embeddings(self) -> list[dict]:
+            return [
+                {"id": "cluster", "embedding": [0.0, 0.0]},
+                {"id": "entity", "embedding": [10.0, 0.0]},
+                {"id": "other", "embedding": [-10.0, 0.0]},
             ]
 
         def list_all_entities(self) -> list[dict]:
             return [
-                {"session_id": "done", "entity_type": "product", "entity_value": "done"},
-                {"session_id": "cluster-a", "entity_type": "product", "entity_value": "alpha"},
-                {"session_id": "entity-only", "entity_type": "product", "entity_value": "beta"},
+                {"session_id": "cluster", "entity_type": "product", "entity_value": "alpha"},
+                {"session_id": "entity", "entity_type": "product", "entity_value": "beta"},
             ]
 
     selection = generator.select_sessions(
-        FakeStore(), done={"done"}, max_sessions=3, cluster_samples=2, sessions_per_entity=1, seed=7
+        FakeStore(),
+        done=set(),
+        clusters=1,
+        sessions_per_cluster=1,
+        min_sessions=1,
+        max_sessions=200,
+        sessions_per_entity=1,
+        seed=0,
     )
 
-    assert len(selection.session_ids) <= 3
     assert len(selection.session_ids) == len(set(selection.session_ids))
-    assert "done" not in selection.session_ids
-    assert {"product:alpha", "product:beta"} <= set(selection.covered_entities)
-    assert selection.uncovered_entities == []
+    assert selection.entity_session_ids == ["entity"]
+    assert selection.covered_entities == ["product:beta"]
+    assert selection.already_covered_entities == ["product:alpha"]
 
 
 def test_select_sessions_reports_entity_coverage_truncated_by_hard_limit() -> None:
@@ -288,15 +421,90 @@ def test_select_sessions_reports_entity_coverage_truncated_by_hard_limit() -> No
             ]
 
     selection = generator.select_sessions(
-        FakeStore(), done=set(), max_sessions=2, cluster_samples=1, sessions_per_entity=1, seed=1
+        FakeStore(),
+        done=set(),
+        clusters=1,
+        sessions_per_cluster=1,
+        min_sessions=1,
+        max_sessions=2,
+        sessions_per_entity=1,
+        seed=1,
     )
 
     assert len(selection.session_ids) == 2
     assert len(selection.uncovered_entities) == 1
 
 
+def test_select_sessions_never_exceeds_hard_maximum() -> None:
+    """Cluster and entity selection together cannot exceed the 200-session limit."""
+    generator = load_script("generate_eval_dataset")
+
+    class FakeStore:
+        """Provide enough vectors and distinct entity values to pressure the cap."""
+
+        def list_session_summary_embeddings(self) -> list[dict]:
+            return [{"id": f"s{index}", "embedding": [float(index), 0.0]} for index in range(250)]
+
+        def list_all_entities(self) -> list[dict]:
+            return [
+                {"session_id": f"s{index}", "entity_type": "topic", "entity_value": str(index)}
+                for index in range(250)
+            ]
+
+    selection = generator.select_sessions(
+        FakeStore(),
+        done=set(),
+        clusters=20,
+        sessions_per_cluster=5,
+        min_sessions=100,
+        max_sessions=200,
+        sessions_per_entity=1,
+        seed=0,
+    )
+
+    assert len(selection.session_ids) == 200
+
+
+def test_select_sessions_prioritizes_entity_values_with_more_sessions() -> None:
+    """Entity selection uses eligible-session count before its stable tie-breaker."""
+    generator = load_script("generate_eval_dataset")
+
+    class FakeStore:
+        """Leave space for only one entity addition after the cluster sample."""
+
+        def list_session_summary_embeddings(self) -> list[dict]:
+            return [
+                {"id": "cluster", "embedding": [0.0, 0.0]},
+                {"id": "large-a", "embedding": [10.0, 0.0]},
+                {"id": "large-b", "embedding": [-10.0, 0.0]},
+                {"id": "small", "embedding": [20.0, 0.0]},
+                {"id": "other", "embedding": [-20.0, 0.0]},
+            ]
+
+        def list_all_entities(self) -> list[dict]:
+            return [
+                {"session_id": "large-a", "entity_type": "topic", "entity_value": "large"},
+                {"session_id": "large-b", "entity_type": "topic", "entity_value": "large"},
+                {"session_id": "small", "entity_type": "topic", "entity_value": "small"},
+            ]
+
+    selection = generator.select_sessions(
+        FakeStore(),
+        done=set(),
+        clusters=1,
+        sessions_per_cluster=1,
+        min_sessions=1,
+        max_sessions=2,
+        sessions_per_entity=1,
+        seed=0,
+    )
+
+    assert selection.covered_entities == ["topic:large"]
+    assert selection.uncovered_entities == ["topic:small"]
+
+
 def test_dry_run_does_not_create_openai_client(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Preview prints the bounded selection before any LLM client is constructed."""
     generator = load_script("generate_eval_dataset")
@@ -322,3 +530,9 @@ def test_dry_run_does_not_create_openai_client(
     )
 
     generator.main()
+
+    output = capsys.readouterr().out
+    assert "cluster-derived" in output
+    assert "backfill" in output
+    assert "entity-added" in output
+    assert "Maximum LLM calls" in output

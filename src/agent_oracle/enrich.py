@@ -7,12 +7,13 @@ short session summary. Used by the store to enrich archived sessions.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 from openai import OpenAI
+from pydantic import BaseModel
 
 from agent_oracle.models import Session
 
@@ -41,6 +42,20 @@ class EnrichmentResult:
     entities: list[Entity]
 
 
+class EntityOutput(BaseModel):
+    """Define one entity in the LLM structured output."""
+
+    type: Literal["product", "person", "organization", "place"]
+    value: str
+
+
+class EnrichmentOutput(BaseModel):
+    """Define the structured output requested from the enrichment LLM."""
+
+    summary: str
+    entities: list[EntityOutput]
+
+
 class Enricher:
     """Extracts entities and a summary from a session via the OpenAI API."""
 
@@ -63,16 +78,21 @@ class Enricher:
     def enrich(self, session: Session) -> EnrichmentResult:
         """Build a prompt from the session, call the API, and parse the result."""
         prompt = self._build_prompt(session)
-        response = self.client.chat.completions.create(
+        response = self.client.chat.completions.parse(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
+            response_format=EnrichmentOutput,
         )
-        raw = response.choices[0].message.content
-        if raw is None:
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
             logger.warning("Enricher received an empty completion for session %s", session.id)
             return EnrichmentResult(summary="", entities=[])
-        return self._parse_response(raw)
+        entities = []
+        for item in parsed.entities:
+            value = normalize_entity_value(item.value)
+            if value:
+                entities.append(Entity(type=item.type, value=value))
+        return EnrichmentResult(summary=parsed.summary, entities=entities)
 
     def _build_prompt(self, session: Session) -> str:
         """Concatenate message contents, truncated, into an extraction prompt."""
@@ -83,23 +103,10 @@ class Enricher:
             f"Analyze the following coding agent session transcript.\n"
             f"Extract entities of these types only: {types}.\n"
             "Write a 2-3 sentence summary of what the session accomplished.\n"
-            'Respond with JSON: {"summary": "...", '
-            '"entities": [{"type": "...", "value": "..."}]}.\n\n'
+            "Return the summary and entities in the requested structure.\n\n"
             f"TRANSCRIPT:\n{transcript}"
         )
 
-    def _parse_response(self, raw: str) -> EnrichmentResult:
-        """Parse the JSON response, validating types against the fixed list."""
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.error("Enricher could not parse model response as JSON", exc_info=True)
-            return EnrichmentResult(summary="", entities=[])
-
-        summary = data.get("summary", "")
-        entities = [
-            Entity(type=item["type"], value=item["value"])
-            for item in data.get("entities", [])
-            if item.get("type") in ENTITY_TYPES and item.get("value")
-        ]
-        return EnrichmentResult(summary=summary, entities=entities)
+def normalize_entity_value(value: str) -> str:
+    """Return *value* in lower-case with whitespace replaced by hyphens."""
+    return "-".join(value.lower().split())
