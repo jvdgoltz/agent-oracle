@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import AgentBadge from '$lib/AgentBadge.svelte';
 	import {
 		getSessions,
+		getResumableAgentSessions,
 		search,
 		fetchSearchSummary,
+		startAgentSession,
 		type SearchMode,
 		type SearchResult,
 		type SessionSummary
@@ -41,6 +44,46 @@
 	let aiSummary = $state('');
 	let summaryLoading = $state(false);
 	let error = $state<string | null>(null);
+
+	let agentMessage = $state('');
+	let resumeCandidates: SessionSummary[] = $state([]);
+	let selectedResumeThreadId = $state('');
+	let agentAvailabilityLoading = $state(true);
+	let agentSubmitting = $state(false);
+	let agentError = $state<string | null>(null);
+
+	/** Load archived Codex threads from this repository that can be resumed. */
+	async function loadResumeCandidates() {
+		agentAvailabilityLoading = true;
+		agentError = null;
+		try {
+			const data = await getResumableAgentSessions();
+			resumeCandidates = data.sessions;
+		} catch (e) {
+			agentError = e instanceof Error ? e.message : 'Could not load resumable Codex sessions.';
+		} finally {
+			agentAvailabilityLoading = false;
+		}
+	}
+
+	/** Start a new Codex thread or continue the selected archived thread. */
+	async function startAgent() {
+		const message = agentMessage.trim();
+		if (!message) {
+			agentError = 'Describe what you want Codex to work on.';
+			return;
+		}
+		agentSubmitting = true;
+		agentError = null;
+		try {
+			const session = await startAgentSession(message, selectedResumeThreadId || undefined);
+			await goto(resolve(`/agent/${encodeURIComponent(session.thread_id)}`));
+		} catch (e) {
+			agentError = e instanceof Error ? e.message : 'Could not start the Codex agent.';
+		} finally {
+			agentSubmitting = false;
+		}
+	}
 
 	/**
 	 * Load the recent session feed, optionally filtered by agent.
@@ -105,6 +148,10 @@
 
 	$effect(() => {
 		loadFeed();
+	});
+
+	$effect(() => {
+		loadResumeCandidates();
 	});
 
 	// Reload the feed whenever the agent filter changes while not searching.
@@ -299,6 +346,60 @@
 			{/each}
 		</ul>
 	{/if}
+
+	<!-- ── Codex launcher ─────────────────────────────────────────── -->
+	<section class="agent-launcher" aria-labelledby="agent-launcher-title">
+		<div class="agent-launcher-heading">
+			<div>
+				<h2 class="section-title" id="agent-launcher-title">Start a Codex agent</h2>
+				<p class="agent-launcher-subtitle">Give Codex a task in this repository.</p>
+			</div>
+		</div>
+		<form
+			class="agent-launcher-form"
+			onsubmit={(e: SubmitEvent) => {
+				e.preventDefault();
+				startAgent();
+			}}
+		>
+			<textarea
+				class="agent-message"
+				bind:value={agentMessage}
+				placeholder="What should Codex work on?"
+				rows="3"
+				disabled={agentSubmitting}
+			></textarea>
+			<label class="resume-label" for="resume-session"
+				>Resume candidates: Codex sessions in this repository.</label
+			>
+			<select
+				class="resume-select"
+				id="resume-session"
+				bind:value={selectedResumeThreadId}
+				disabled={agentAvailabilityLoading || agentSubmitting}
+			>
+				<option value="">Start a new session</option>
+				{#each resumeCandidates as candidate (candidate.id)}
+					<option value={candidate.id}>
+						Resume {candidate.summary || candidate.id}
+					</option>
+				{/each}
+			</select>
+			<div class="agent-launcher-actions">
+				{#if agentAvailabilityLoading}
+					<span class="muted">Loading resume candidates…</span>
+				{:else if resumeCandidates.length === 0}
+					<span class="muted">No archived Codex sessions are available to resume.</span>
+				{/if}
+				<button class="agent-start-btn" type="submit" disabled={agentSubmitting}>
+					{agentSubmitting ? 'Starting…' : selectedResumeThreadId ? 'Resume Codex' : 'Start Codex'}
+				</button>
+			</div>
+		</form>
+		{#if agentError}
+			<p class="error agent-error" role="alert">{agentError}</p>
+		{/if}
+	</section>
 </div>
 
 <style>
@@ -700,5 +801,104 @@
 		color: var(--muted);
 		max-width: 420px;
 		margin-inline: auto;
+	}
+
+	/* ── Codex launcher ─────────────────────────────────────────── */
+	.agent-launcher {
+		display: flex;
+		flex-direction: column;
+		gap: var(--s3);
+		padding: var(--s4) var(--s5);
+		background-color: var(--surface);
+		border: 1px solid var(--border-strong);
+		border-radius: var(--r3);
+	}
+
+	.agent-launcher-heading {
+		display: flex;
+		align-items: baseline;
+	}
+
+	.agent-launcher-subtitle {
+		margin: var(--s1) 0 0;
+		font-size: 13px;
+		color: var(--muted);
+	}
+
+	.agent-launcher-form {
+		display: flex;
+		flex-direction: column;
+		gap: var(--s2);
+	}
+
+	.agent-message,
+	.resume-select {
+		box-sizing: border-box;
+		width: 100%;
+		border: 1px solid var(--border);
+		border-radius: var(--r2);
+		background-color: var(--elevated);
+		color: var(--text);
+		font: inherit;
+	}
+
+	.agent-message {
+		resize: vertical;
+		padding: var(--s3);
+		line-height: 1.45;
+	}
+
+	.agent-message:focus,
+	.resume-select:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-glow);
+	}
+
+	.resume-label {
+		font-size: 12px;
+		color: var(--muted);
+	}
+
+	.resume-select {
+		padding: var(--s2) var(--s3);
+		font-size: 13px;
+	}
+
+	.agent-launcher-actions {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--s3);
+		min-height: 28px;
+	}
+
+	.agent-start-btn {
+		margin-left: auto;
+		padding: 5px 14px;
+		border: 1px solid var(--accent);
+		border-radius: var(--r2);
+		background-color: var(--accent-dim);
+		color: var(--accent);
+		font: inherit;
+		font-size: 13px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.agent-start-btn:hover:not(:disabled) {
+		background-color: var(--accent);
+		color: #0d0d0f;
+	}
+
+	.agent-start-btn:disabled,
+	.agent-message:disabled,
+	.resume-select:disabled {
+		cursor: not-allowed;
+		opacity: 0.65;
+	}
+
+	.agent-error {
+		margin: 0;
 	}
 </style>

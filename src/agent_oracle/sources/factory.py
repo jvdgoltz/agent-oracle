@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
 
 
@@ -23,6 +23,7 @@ def parse_factory_session(path: Path) -> Session:
     cwd = ""
     started_at = datetime.fromtimestamp(0)
     messages: list[Message] = []
+    interruptions: list[Interruption] = []
     model = _read_factory_session_model(path)
 
     for line in path.read_text().splitlines():
@@ -39,11 +40,13 @@ def parse_factory_session(path: Path) -> Session:
                 started_at = ts
         elif record_type == "message":
             timestamp = parse_timestamp(record.get("timestamp", ""))
-            extracted = _extract_messages(record, timestamp, model)
-            if extracted:
-                if started_at == datetime.fromtimestamp(0):
-                    started_at = timestamp
-                messages.extend(extracted)
+            messages.extend(_extract_messages(record, timestamp, model))
+            if started_at == datetime.fromtimestamp(0) and messages:
+                started_at = timestamp
+        elif record_type == "agent_turn_outcome" and record.get("reason") == "cancelled":
+            interruption = _interruption_from_outcome(record, messages, model)
+            if interruption is not None:
+                interruptions.append(interruption)
 
     if started_at == datetime.fromtimestamp(0) and messages:
         started_at = messages[0].timestamp
@@ -54,7 +57,38 @@ def parse_factory_session(path: Path) -> Session:
         cwd=cwd,
         started_at=started_at,
         messages=messages,
+        interruptions=_deduplicate_interruptions(interruptions),
     )
+
+
+def _interruption_from_outcome(
+    record: dict, messages: list[Message], model: str | None
+) -> Interruption | None:
+    """Link a cancelled Factory outcome to its preceding real user prompt."""
+    turn_id = record.get("turnId")
+    if not turn_id:
+        return None
+    source_id = str(turn_id)
+    return Interruption(
+        source_id=source_id,
+        timestamp=None,
+        model=model,
+        user_message_seq=_last_user_message_seq(messages),
+    )
+
+
+def _last_user_message_seq(messages: list[Message]) -> int | None:
+    """Return the latest visible user prompt before an outcome record."""
+    for sequence in range(len(messages) - 1, -1, -1):
+        message = messages[sequence]
+        if message.role is MessageRole.USER and not message.is_injected:
+            return sequence
+    return None
+
+
+def _deduplicate_interruptions(interruptions: list[Interruption]) -> list[Interruption]:
+    """Keep one Factory interruption per cancelled user turn."""
+    return list({interruption.source_id: interruption for interruption in interruptions}.values())
 
 
 def _extract_messages(record: dict, timestamp: datetime, model: str | None) -> list[Message]:

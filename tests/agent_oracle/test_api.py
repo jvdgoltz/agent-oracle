@@ -48,6 +48,8 @@ def test_behavior_stats_passes_bounded_filters_to_store() -> None:
     assert response.status_code == 200
     assert response.json()["totals"]["negation"] == 1
     assert response.json()["totals"]["blame"] == 1
+    assert response.json()["totals"]["detected_messages"] == 1
+    assert response.json()["totals"]["detection_rate"] == 100.0
     assert response.json()["models"][0]["model"] == "unknown"
     store.list_behavior_messages.assert_called_once()
 

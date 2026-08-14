@@ -10,6 +10,23 @@
  */
 const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8731';
 
+/** A live Codex agent thread owned by the Agent Oracle backend. */
+export interface AgentSession {
+	thread_id: string;
+}
+
+/** One structured event emitted during a Codex agent turn. */
+export interface AgentEvent {
+	type: string;
+	data: unknown;
+	method?: string;
+}
+
+/** Repository-scoped archived Codex sessions eligible for resume. */
+export interface ResumableAgentSessions {
+	sessions: SessionSummary[];
+}
+
 /** A single message within a session. */
 export interface Message {
 	id: number;
@@ -73,6 +90,10 @@ export interface SessionList {
 /** OMP-compatible counts and per-user-message rates for one scope. */
 export interface BehaviorSummary {
 	user_messages: number;
+	interruptions: number;
+	interruption_rate: number;
+	detected_messages: number;
+	detection_rate: number;
 	chars: number;
 	words: number;
 	yelling: number;
@@ -98,6 +119,33 @@ export interface BehaviorReport {
 	models: (BehaviorSummary & { model: string })[];
 }
 
+/** Aggregate archive counts and duration statistics. */
+export interface OverviewTotals {
+	sessions: number;
+	conversation_messages: number;
+	assistant_messages: number;
+	average_session_messages: number;
+	median_session_messages: number;
+	average_session_duration_seconds: number;
+	median_session_duration_seconds: number;
+}
+
+/** Query-time archive overview statistics. */
+export interface OverviewReport {
+	totals: OverviewTotals;
+	entities: { entity_type: string; entity_value: string; sessions: number }[];
+	models: { model: string; messages: number }[];
+	agents: { agent: string; sessions: number }[];
+	projects: { cwd: string; sessions: number }[];
+	session_lengths: {
+		session_id: string;
+		agent: string;
+		cwd: string;
+		messages: number;
+		duration_seconds: number;
+	}[];
+}
+
 /** Valid search modes accepted by the backend. */
 export type SearchMode = 'text' | 'vector' | 'hybrid';
 
@@ -109,9 +157,79 @@ export type SearchMode = 'text' | 'vector' | 'hybrid';
 async function get<T>(path: string): Promise<T> {
 	const response = await fetch(`${API_BASE_URL}${path}`);
 	if (!response.ok) {
-		throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+		throw await responseError(response);
 	}
 	return (await response.json()) as T;
+}
+
+/** Send JSON to the backend and parse its response. */
+async function post<T>(path: string, body?: unknown): Promise<T> {
+	const response = await fetch(`${API_BASE_URL}${path}`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: body === undefined ? undefined : JSON.stringify(body)
+	});
+	if (!response.ok) throw await responseError(response);
+	return (await response.json()) as T;
+}
+
+/** Convert a FastAPI error response into a useful client-facing error. */
+async function responseError(response: Response): Promise<Error> {
+	const fallback = `Request failed: ${response.status} ${response.statusText}`;
+	try {
+		const body = (await response.json()) as { detail?: unknown };
+		if (typeof body.detail === 'string') return new Error(body.detail);
+		if (body.detail !== undefined) return new Error(JSON.stringify(body.detail));
+	} catch {
+		return new Error(fallback);
+	}
+	return new Error(fallback);
+}
+
+/** Start a new Codex agent thread, or resume an existing Codex thread. */
+export function startAgentSession(message: string, resumeThreadId?: string): Promise<AgentSession> {
+	return post('/api/agent/sessions', {
+		message,
+		...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {})
+	});
+}
+
+/** List archived Codex sessions from this repository that Codex can resume. */
+export function getResumableAgentSessions(): Promise<ResumableAgentSessions> {
+	return get('/api/agent/sessions');
+}
+
+/** Load an archived Codex transcript without starting a turn. */
+export function getArchivedAgentSession(threadId: string): Promise<SessionDetail> {
+	return get(`/api/agent/sessions/${encodeURIComponent(threadId)}`);
+}
+
+/** Send a follow-up message to an idle Codex agent thread. */
+export function sendAgentMessage(threadId: string, message: string): Promise<AgentSession> {
+	return post(`/api/agent/sessions/${encodeURIComponent(threadId)}/messages`, { message });
+}
+
+/** Stop the active Codex agent turn. */
+export async function stopAgentSession(threadId: string): Promise<void> {
+	const response = await fetch(
+		`${API_BASE_URL}/api/agent/sessions/${encodeURIComponent(threadId)}/stop`,
+		{ method: 'POST' }
+	);
+	if (!response.ok) throw await responseError(response);
+}
+
+/** Release the current Codex session. */
+export async function deleteAgentSession(threadId: string): Promise<void> {
+	const response = await fetch(
+		`${API_BASE_URL}/api/agent/sessions/${encodeURIComponent(threadId)}`,
+		{ method: 'DELETE' }
+	);
+	if (!response.ok) throw await responseError(response);
+}
+
+/** Return the SSE endpoint for the current agent turn. */
+export function agentEventsUrl(threadId: string): string {
+	return `${API_BASE_URL}/api/agent/sessions/${encodeURIComponent(threadId)}/events`;
 }
 
 /**
@@ -142,6 +260,20 @@ export function getBehaviorStats(
 	if (end) params.set('end', end);
 	const query = params.size ? `?${params.toString()}` : '';
 	return get(`/api/stats/behavior${query}`);
+}
+
+/** Fetch archive overview statistics for an optional bounded scope. */
+export function getOverviewStats(
+	agent?: string,
+	start?: string,
+	end?: string
+): Promise<OverviewReport> {
+	const params = new URLSearchParams();
+	if (agent) params.set('agent', agent);
+	if (start) params.set('start', start);
+	if (end) params.set('end', end);
+	const query = params.size ? `?${params.toString()}` : '';
+	return get(`/api/stats/overview${query}`);
 }
 
 /**

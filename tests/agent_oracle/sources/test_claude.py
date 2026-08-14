@@ -193,3 +193,45 @@ def test_parse_skips_tool_and_empty_thinking_parts(tmp_path: Path) -> None:
 
     assert len(session.messages) == 1
     assert session.messages[0].content == "Visible reply."
+
+
+def test_parse_records_deduplicated_user_interruption(tmp_path: Path) -> None:
+    """Claude interruption sentinels target the referenced assistant model once."""
+    assistant = {
+        "type": "assistant",
+        "message": {"id": "api-a1", "model": "claude-fable-5", "role": "assistant", "content": []},
+        "uuid": "a1",
+        "timestamp": "2026-08-01T12:00:01Z",
+    }
+    sentinel = {
+        "type": "user",
+        "interruptedMessageId": "api-a1",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "[Request interrupted by user]"}],
+        },
+        "timestamp": "2026-08-01T12:00:02Z",
+    }
+    session = parse_claude_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "stop"},
+                    "uuid": "u1",
+                    "timestamp": "2026-08-01T12:00:00Z",
+                },
+                assistant,
+                sentinel,
+                sentinel,
+            ],
+        )
+    )
+
+    assert [
+        (item.source_id, item.model, item.user_message_seq) for item in session.interruptions
+    ] == [("api-a1", "claude-fable-5", 0)]
+    assert [(message.role, message.content) for message in session.messages] == [
+        (MessageRole.USER, "stop")
+    ]

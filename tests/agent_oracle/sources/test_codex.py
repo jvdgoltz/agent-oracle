@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from agent_oracle.models import AgentType, MessageRole
-from agent_oracle.sources.codex import parse_codex_session
+from agent_oracle.sources.codex import load_codex_session, parse_codex_session
 
 
 def _write_jsonl(tmp_path: Path, lines: list[dict]) -> Path:
@@ -151,3 +151,117 @@ def test_parse_skips_truncated_line(tmp_path: Path) -> None:
     assert session.id == "trunc-001"
     assert len(session.messages) == 1
     assert session.messages[0].content == "hi"
+
+
+def test_parse_records_interrupted_turn(tmp_path: Path) -> None:
+    """Codex turn_aborted events mark the preceding real user message."""
+    session = parse_codex_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": [{"text": "stop"}]},
+                },
+                {"type": "turn_context", "payload": {"model": "gpt-5.6"}},
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-08-01T12:00:03Z",
+                    "payload": {
+                        "type": "turn_aborted",
+                        "reason": "interrupted",
+                        "turn_id": "turn-1",
+                        "completed_at": 1786701652,
+                    },
+                },
+            ],
+        )
+    )
+
+    assert [
+        (item.source_id, item.model, item.user_message_seq) for item in session.interruptions
+    ] == [("turn-1", "gpt-5.6", 0)]
+    timestamp = session.interruptions[0].timestamp
+    assert timestamp is not None
+    assert timestamp.isoformat() == "2026-08-01T12:00:03+00:00"
+
+
+def test_parse_excludes_synthetic_user_abort_marker(tmp_path: Path) -> None:
+    """Codex interruption events skip their preceding synthetic user notice."""
+    marker = "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"
+    session = parse_codex_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": [{"text": "real"}]},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"text": "answer"}],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": [{"text": marker}]},
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "turn_aborted",
+                        "reason": "interrupted",
+                        "turn_id": "turn-1",
+                    },
+                },
+            ],
+        )
+    )
+
+    assert session.messages[2].is_injected is True
+    assert session.interruptions[0].user_message_seq == 0
+
+
+def test_parse_marks_recommended_plugins_user_message_as_injected(tmp_path: Path) -> None:
+    """Codex plugin recommendation metadata is not a real user prompt."""
+    session = parse_codex_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "text", "text": "<recommended_plugins>\n- GitHub"}],
+                    },
+                }
+            ],
+        )
+    )
+
+    assert session.messages[0].is_injected is True
+
+
+def test_load_codex_session_reads_the_matching_local_thread(tmp_path: Path) -> None:
+    """A direct thread lookup loads only the requested local Codex JSONL."""
+    path = tmp_path / "2026" / "08" / "14" / "rollout-2026-08-14-thread-1.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "thread-1", "cwd": "/tmp/project"},
+            }
+        )
+        + "\n"
+    )
+
+    session = load_codex_session("thread-1", tmp_path)
+
+    assert session is not None
+    assert session.id == "thread-1"
+    assert load_codex_session("missing", tmp_path) is None

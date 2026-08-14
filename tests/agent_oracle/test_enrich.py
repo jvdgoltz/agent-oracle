@@ -76,9 +76,7 @@ def test_enrich_returns_empty_result_without_parsed_output() -> None:
 
     enricher._client = cast("OpenAI", fake)
 
-    assert enricher.enrich(_make_session(["hello"])) == EnrichmentResult(
-        summary="", entities=[]
-    )
+    assert enricher.enrich(_make_session(["hello"])) == EnrichmentResult(summary="", entities=[])
 
 
 @pytest.mark.parametrize(

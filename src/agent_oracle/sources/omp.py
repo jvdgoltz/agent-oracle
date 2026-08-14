@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
 
 
@@ -26,6 +26,7 @@ def parse_omp_session(path: Path) -> Session:
     cwd = ""
     started_at = datetime.fromtimestamp(0)
     messages: list[Message] = []
+    interruptions: list[Interruption] = []
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -41,6 +42,21 @@ def parse_omp_session(path: Path) -> Session:
                 started_at = ts
         elif record_type == "message":
             timestamp = parse_timestamp(record.get("timestamp", ""))
+            message_data = record.get("message", {})
+            if (
+                message_data.get("role") == "assistant"
+                and message_data.get("stopReason") == "aborted"
+                and message_data.get("errorMessage") == "Interrupted by user"
+                and record.get("id")
+            ):
+                interruptions.append(
+                    Interruption(
+                        source_id=str(record["id"]),
+                        timestamp=timestamp,
+                        model=message_data.get("model"),
+                        user_message_seq=_last_user_message_seq(messages),
+                    )
+                )
             extracted = _extract_messages(record, timestamp)
             if extracted:
                 if started_at == datetime.fromtimestamp(0):
@@ -56,7 +72,16 @@ def parse_omp_session(path: Path) -> Session:
         cwd=cwd,
         started_at=started_at,
         messages=messages,
+        interruptions=interruptions,
     )
+
+
+def _last_user_message_seq(messages: list[Message]) -> int | None:
+    """Return the latest real user message sequence for an interruption."""
+    for seq in range(len(messages) - 1, -1, -1):
+        if messages[seq].role is MessageRole.USER:
+            return seq
+    return None
 
 
 def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:

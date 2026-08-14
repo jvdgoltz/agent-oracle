@@ -26,7 +26,13 @@
 			<span class="logo-icon">◈</span>
 			<span class="logo-text">Agent Oracle</span>
 		</a>
-		<a class="stats-link" href={resolve('/stats/behavior')}>User behavior</a>
+		<div class="stats-nav">
+			<a class:active={page.url.pathname === '/stats'} href={resolve('/stats')}>Overview</a>
+			<a
+				class:active={page.url.pathname.startsWith('/stats/behavior')}
+				href={resolve('/stats/behavior')}>User behavior</a
+			>
+		</div>
 		{#if isSession}
 			<a class="back-link" href={resolve('/')}>← All sessions</a>
 		{/if}
@@ -224,10 +230,21 @@
 		transition: color 0.15s;
 	}
 
-	.stats-link {
+	.stats-nav {
 		margin-left: auto;
+		display: flex;
+		gap: var(--s3);
+	}
+
+	.stats-nav a {
 		color: var(--muted);
 		font-size: 12px;
+	}
+
+	.stats-nav a:hover,
+	.stats-nav a.active {
+		color: var(--text);
+		text-decoration: none;
 	}
 
 	.back-link:hover {

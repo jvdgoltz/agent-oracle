@@ -56,6 +56,16 @@ class Message:
 
 
 @dataclass(frozen=True, slots=True)
+class Interruption:
+    """An explicit source interruption linked to a session user-message sequence."""
+
+    source_id: str
+    timestamp: datetime | None
+    model: str | None
+    user_message_seq: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class Session:
     """A coding agent session with its messages."""
 
@@ -64,3 +74,13 @@ class Session:
     cwd: str
     started_at: datetime
     messages: list[Message] = field(default_factory=list)
+    interruptions: list[Interruption] = field(default_factory=list)
+
+    @property
+    def interruption_models(self) -> dict[int, str | None]:
+        """Return interrupted user-message sequences keyed to their assistant model."""
+        return {
+            item.user_message_seq: item.model
+            for item in self.interruptions
+            if item.user_message_seq is not None
+        }

@@ -160,3 +160,58 @@ def test_parse_skips_tool_parts(tmp_path: Path) -> None:
 
     assert len(session.messages) == 1
     assert session.messages[0].content == "Visible reply."
+
+
+def test_parse_records_cancelled_turn(tmp_path: Path) -> None:
+    """Factory outcomes use a turn ID distinct from the preceding user message ID."""
+    session = parse_factory_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "message",
+                    "id": "user-message-1",
+                    "timestamp": "2026-08-01T12:00:00Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": "stop"}]},
+                },
+                {"type": "agent_turn_outcome", "turnId": "turn-1", "reason": "cancelled"},
+            ],
+        )
+    )
+
+    assert [(item.source_id, item.user_message_seq) for item in session.interruptions] == [
+        ("turn-1", 0)
+    ]
+
+
+def test_parse_deduplicates_cancelled_turn_and_ignores_injected_messages(tmp_path: Path) -> None:
+    """Factory links a cancelled turn to its real user message exactly once."""
+    session = parse_factory_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "message",
+                    "id": "user-message-1",
+                    "timestamp": "2026-08-01T12:00:00Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": "stop"}]},
+                },
+                {
+                    "type": "message",
+                    "id": "tool-result",
+                    "timestamp": "2026-08-01T12:00:01Z",
+                    "message": {
+                        "role": "user",
+                        "visibility": "llm_only",
+                        "content": [{"type": "tool_result", "content": "hidden"}],
+                    },
+                },
+                {"type": "agent_turn_outcome", "turnId": "turn-1", "reason": "cancelled"},
+                {"type": "agent_turn_outcome", "turnId": "turn-1", "reason": "cancelled"},
+            ],
+        )
+    )
+
+    assert [(item.source_id, item.user_message_seq) for item in session.interruptions] == [
+        ("turn-1", 0)
+    ]

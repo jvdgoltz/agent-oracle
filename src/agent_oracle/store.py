@@ -1,9 +1,4 @@
-"""SQLite store for Agent Oracle.
-
-Manages a single database file holding sessions, messages (with FTS5 full-text
-search and sqlite-vec vector search), entities, and summaries.  Provides text,
-vector, and hybrid (reciprocal rank fusion) search over archived sessions.
-"""
+"""SQLite storage and FTS/vector search for archived agent sessions."""
 
 from __future__ import annotations
 
@@ -18,6 +13,7 @@ import sqlite_vec
 
 from agent_oracle.behavior_store import list_behavior_messages as query_behavior_messages
 from agent_oracle.models import Session
+from agent_oracle.overview_store import list_overview_rows as query_overview_rows
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +96,9 @@ class Store:
                 is_thinking          INTEGER DEFAULT 0,
                 model                TEXT,
                 is_system_instruction INTEGER DEFAULT 0,
-                is_injected          INTEGER DEFAULT 0
+                is_injected          INTEGER DEFAULT 0,
+                is_interrupted       INTEGER DEFAULT 0,
+                interruption_model   TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_session_id
@@ -134,13 +132,12 @@ class Store:
         )
         self.conn.commit()
 
-    # ------------------------------------------------------------------ #
     # Indexing
-    # ------------------------------------------------------------------ #
 
     def index_session(self, session: Session) -> None:
         """Insert or replace *session* and its messages (regular table + FTS5)."""
         self._delete_session_messages(session.id)
+        interrupted_messages = session.interruption_models
         self.conn.execute(
             "INSERT OR REPLACE INTO sessions (id, agent, cwd, started_at, summary, enriched) "
             "VALUES (?, ?, ?, ?, "
@@ -159,8 +156,9 @@ class Store:
             cursor = self.conn.execute(
                 "INSERT INTO messages "
                 "(session_id, role, content, timestamp, seq, "
-                "is_thinking, model, is_system_instruction, is_injected) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "is_thinking, model, is_system_instruction, is_injected, "
+                "is_interrupted, interruption_model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     session.id,
                     msg.role.value,
@@ -171,6 +169,8 @@ class Store:
                     msg.model,
                     int(msg.is_system_instruction),
                     int(msg.is_injected),
+                    int(seq in interrupted_messages),
+                    interrupted_messages.get(seq),
                 ),
             )
             if msg.is_searchable:
@@ -289,9 +289,7 @@ class Store:
         logger.info("Backfilled summary indexes: %d FTS, %d vectors", len(need_fts), len(need_vec))
         return len(need_fts) + len(need_vec)
 
-    # ------------------------------------------------------------------ #
     # Search
-    # ------------------------------------------------------------------ #
 
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """FTS5 BM25 search over messages and session summaries."""
@@ -415,9 +413,7 @@ class Store:
             for key, score in ranked
         ]
 
-    # ------------------------------------------------------------------ #
     # Retrieval
-    # ------------------------------------------------------------------ #
 
     def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
         """Return sessions ordered by started_at descending with pagination."""
@@ -441,6 +437,12 @@ class Store:
     ) -> list[dict]:
         """Return real user messages with session fields for behavior statistics."""
         return query_behavior_messages(self.conn, agent=agent, start=start, end=end)
+
+    def list_overview_rows(
+        self, *, agent: str | None = None, start: date | None = None, end: date | None = None
+    ) -> dict[str, list[dict]]:
+        """Return scoped sessions and visible messages for overview statistics."""
+        return query_overview_rows(self.conn, agent=agent, start=start, end=end)
 
     def is_session_indexed(self, session_id: str) -> bool:
         """Return True if *session_id* exists and has been enriched."""

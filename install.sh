@@ -60,7 +60,7 @@ cat >"$LAUNCH_DIR/$LABEL_BACKEND.plist" <<PLIST
         <string>agent_oracle.main:app</string>
         <string>--reload</string>
         <string>--host</string>
-        <string>0.0.0.0</string>
+        <string>127.0.0.1</string>
         <string>--port</string>
         <string>8731</string>
     </array>
@@ -107,6 +107,7 @@ cat >"$LAUNCH_DIR/$LABEL_FRONTEND.plist" <<PLIST
         <string>--port</string>
         <string>8732</string>
         <string>--host</string>
+        <string>127.0.0.1</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$PROJECT_DIR/frontend</string>

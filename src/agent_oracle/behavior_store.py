@@ -31,8 +31,8 @@ def list_behavior_messages(
         clauses.append("date(m.timestamp) <= date(?)")
         params.append(end.isoformat())
     rows = connection.execute(
-        "SELECT m.content, m.timestamp, m.is_injected, s.agent, s.cwd, "
-        "COALESCE((SELECT a.model FROM messages a "
+        "SELECT m.content, m.timestamp, m.is_injected, m.is_interrupted, s.agent, s.cwd, "
+        "COALESCE(m.interruption_model, (SELECT a.model FROM messages a "
         "WHERE a.session_id = m.session_id AND a.role = 'assistant' AND a.seq < m.seq "
         "AND a.is_thinking = 0 AND a.is_system_instruction = 0 AND a.is_injected = 0 "
         "ORDER BY a.seq DESC, a.id DESC LIMIT 1), 'unknown') AS model "

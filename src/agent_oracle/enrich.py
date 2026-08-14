@@ -107,6 +107,7 @@ class Enricher:
             f"TRANSCRIPT:\n{transcript}"
         )
 
+
 def normalize_entity_value(value: str) -> str:
     """Return *value* in lower-case with whitespace replaced by hyphens."""
     return "-".join(value.lower().split())

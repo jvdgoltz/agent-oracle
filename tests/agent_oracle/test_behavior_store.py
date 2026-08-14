@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
-from agent_oracle.models import AgentType, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.store import Store
 
 
@@ -51,6 +52,7 @@ def test_list_behavior_messages_excludes_internal_traffic(store: Store) -> None:
             "content": "real",
             "timestamp": "2026-08-01T12:00:00+00:00",
             "is_injected": 0,
+            "is_interrupted": 0,
             "agent": "codex",
             "cwd": "/work/project",
             "model": "unknown",
@@ -222,3 +224,19 @@ def test_list_behavior_messages_does_not_cross_session_model_boundaries(store: S
     rows = store.list_behavior_messages()
     prompt = next(row for row in rows if row["content"] == "prompt")
     assert prompt["model"] == "unknown"
+
+
+def test_list_behavior_messages_uses_interruption_model(store: Store) -> None:
+    """Attribute an interrupted user turn to the cancelled assistant model."""
+    timestamp = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    session = _session(
+        "interrupted",
+        AgentType.CLAUDE,
+        "/work/project",
+        [Message(role=MessageRole.USER, content="stop", timestamp=timestamp)],
+    )
+    session = replace(session, interruptions=[Interruption("a1", timestamp, "claude-fable-5", 0)])
+    store.index_session(session)
+
+    assert store.list_behavior_messages()[0]["model"] == "claude-fable-5"
+    assert store.list_behavior_messages()[0]["is_interrupted"] == 1

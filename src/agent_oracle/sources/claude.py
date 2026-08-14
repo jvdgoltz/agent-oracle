@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
 
 _MESSAGE_TYPES = {"user", "assistant"}
@@ -27,6 +27,8 @@ def parse_claude_session(path: Path) -> Session:
     cwd = ""
     started_at = datetime.fromtimestamp(0)
     messages: list[Message] = []
+    interruptions: list[Interruption] = []
+    assistant_models: dict[str, str | None] = {}
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -43,6 +45,19 @@ def parse_claude_session(path: Path) -> Session:
         if started_at == datetime.fromtimestamp(0):
             started_at = timestamp
 
+        interrupted_id = record.get("interruptedMessageId")
+        if interrupted_id and _is_interruption_sentinel(record):
+            interruptions.append(
+                Interruption(
+                    source_id=str(interrupted_id),
+                    timestamp=timestamp,
+                    model=assistant_models.get(str(interrupted_id)),
+                    user_message_seq=_last_user_message_seq(messages),
+                )
+            )
+            continue
+        if record_type == "assistant" and record.get("message", {}).get("id"):
+            assistant_models[str(record["message"]["id"])] = record["message"].get("model")
         msg = _extract_messages(record, timestamp)
         messages.extend(msg)
 
@@ -52,7 +67,28 @@ def parse_claude_session(path: Path) -> Session:
         cwd=cwd,
         started_at=started_at,
         messages=messages,
+        interruptions=_deduplicate_interruptions(interruptions),
     )
+
+
+def _is_interruption_sentinel(record: dict) -> bool:
+    """Return True for Claude's explicit manual-interruption user record."""
+    content = record.get("message", {}).get("content")
+    marker = "[Request interrupted by user]"
+    return content == marker or content == [{"type": "text", "text": marker}]
+
+
+def _last_user_message_seq(messages: list[Message]) -> int | None:
+    """Return the latest real user message sequence for an interruption."""
+    for seq in range(len(messages) - 1, -1, -1):
+        if messages[seq].role is MessageRole.USER and not messages[seq].is_injected:
+            return seq
+    return None
+
+
+def _deduplicate_interruptions(interruptions: list[Interruption]) -> list[Interruption]:
+    """Keep one Claude interruption per interrupted assistant API message."""
+    return list({interruption.source_id: interruption for interruption in interruptions}.values())
 
 
 def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:

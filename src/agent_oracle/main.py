@@ -38,6 +38,9 @@ DATA_DIR = Path.home() / ".agent-oracle"
 #: TCP port the backend listens on (mirrored in the launchd service spec).
 PORT = 8731
 
+#: Bind the unauthenticated workspace-write API to this machine only.
+HOST = "127.0.0.1"
+
 
 def _create_components() -> tuple[Store, Embedder, Enricher, SessionWatcher]:
     """Instantiate the store, embedder, enricher, and watcher."""
@@ -101,7 +104,7 @@ if __name__ == "__main__":
     """Run the server directly when invoked as a module."""
     uvicorn.run(
         "agent_oracle.main:app",
-        host="0.0.0.0",
+        host=HOST,
         port=PORT,
         reload=True,
     )

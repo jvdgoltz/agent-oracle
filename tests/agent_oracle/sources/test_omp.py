@@ -187,3 +187,18 @@ def test_parse_skips_truncated_line(tmp_path: Path) -> None:
 
     assert len(session.messages) == 1
     assert session.messages[0].content == "hello"
+
+
+def test_parse_records_user_interruption(tmp_path: Path) -> None:
+    """OMP aborted assistant messages mark the preceding real user message."""
+    record = _message_record("assistant", [], "a1", model="omp-model")
+    record["message"].update({"stopReason": "aborted", "errorMessage": "Interrupted by user"})
+    session = parse_omp_session(
+        _write_jsonl(
+            tmp_path, [_message_record("user", [{"type": "text", "text": "stop"}], "u1"), record]
+        )
+    )
+
+    assert [
+        (item.source_id, item.model, item.user_message_seq) for item in session.interruptions
+    ] == [("a1", "omp-model", 0)]

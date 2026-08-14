@@ -3,7 +3,7 @@
 	import AgentBadge from '$lib/AgentBadge.svelte';
 	import { getSession, type Message, type SessionDetail } from '$lib/api';
 	import { relativeTime } from '$lib/format';
-	import { marked } from 'marked';
+	import { renderMarkdown } from '$lib/markdown';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	/** The `id` route parameter for this session. */
@@ -13,7 +13,7 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
-	/** Messages ordered newest-first for display. */
+	/** Messages ordered oldest-first for display. */
 	let orderedMessages: { entry: Message; key: string; html: string }[] = $state([]);
 
 	/** Whether non-searchable messages (thinking/system/injected) are shown. */
@@ -54,15 +54,6 @@
 	);
 
 	/**
-	 * Render message content as HTML via marked.
-	 * @param content - Raw markdown content.
-	 * @returns HTML string for `{@html}` injection.
-	 */
-	function renderMarkdown(content: string): string {
-		return marked.parse(content, { async: false }) as string;
-	}
-
-	/**
 	 * Load the full session detail once the id parameter is known.
 	 */
 	async function load() {
@@ -74,7 +65,7 @@
 				return;
 			}
 			session = await getSession(id);
-			orderedMessages = [...session.messages].reverse().map((entry) => ({
+			orderedMessages = session.messages.map((entry) => ({
 				entry,
 				key: `${entry.id}`,
 				html: renderMarkdown(entry.content)
