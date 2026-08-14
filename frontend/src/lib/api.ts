@@ -70,6 +70,34 @@ export interface SessionList {
 	total: number;
 }
 
+/** OMP-compatible counts and per-user-message rates for one scope. */
+export interface BehaviorSummary {
+	user_messages: number;
+	chars: number;
+	words: number;
+	yelling: number;
+	profanity: number;
+	anguish: number;
+	negation: number;
+	repetition: number;
+	blame: number;
+	yelling_rate: number;
+	profanity_rate: number;
+	anguish_rate: number;
+	negation_rate: number;
+	repetition_rate: number;
+	blame_rate: number;
+}
+
+/** OMP-compatible behavior statistics for the selected archive scope. */
+export interface BehaviorReport {
+	totals: BehaviorSummary;
+	daily: (BehaviorSummary & { date: string })[];
+	agents: (BehaviorSummary & { agent: string })[];
+	projects: (BehaviorSummary & { cwd: string })[];
+	models: (BehaviorSummary & { model: string })[];
+}
+
 /** Valid search modes accepted by the backend. */
 export type SearchMode = 'text' | 'vector' | 'hybrid';
 
@@ -100,6 +128,20 @@ export function getHealth(): Promise<{ status: string }> {
  */
 export function getSessions(limit = 50, offset = 0): Promise<SessionList> {
 	return get(`/api/sessions?limit=${limit}&offset=${offset}`);
+}
+
+/** Fetch OMP-compatible behavior statistics for an optional archive scope. */
+export function getBehaviorStats(
+	agent?: string,
+	start?: string,
+	end?: string
+): Promise<BehaviorReport> {
+	const params = new URLSearchParams();
+	if (agent) params.set('agent', agent);
+	if (start) params.set('start', start);
+	if (end) params.set('end', end);
+	const query = params.size ? `?${params.toString()}` : '';
+	return get(`/api/stats/behavior${query}`);
 }
 
 /**

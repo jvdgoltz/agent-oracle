@@ -29,6 +29,38 @@ def test_health_returns_ok() -> None:
     assert resp.json() == {"status": "ok"}
 
 
+def test_behavior_stats_passes_bounded_filters_to_store() -> None:
+    """Behavior statistics accept agent and inclusive calendar-date filters."""
+    store = MagicMock()
+    store.list_behavior_messages.return_value = [
+        {
+            "content": "Wrong, you missed it",
+            "timestamp": "2026-08-01T12:00:00+00:00",
+            "agent": "codex",
+            "cwd": "/work/a",
+            "is_injected": 0,
+        }
+    ]
+    client, store, _embedder = _client(store=store)
+
+    response = client.get("/api/stats/behavior?agent=codex&start=2026-08-01&end=2026-08-01")
+
+    assert response.status_code == 200
+    assert response.json()["totals"]["negation"] == 1
+    assert response.json()["totals"]["blame"] == 1
+    assert response.json()["models"][0]["model"] == "unknown"
+    store.list_behavior_messages.assert_called_once()
+
+
+def test_behavior_stats_rejects_reversed_dates() -> None:
+    """Behavior statistics reject an invalid date range."""
+    client, _store, _embedder = _client()
+
+    response = client.get("/api/stats/behavior?start=2026-08-02&end=2026-08-01")
+
+    assert response.status_code == 422
+
+
 def test_list_sessions_returns_paginated_results() -> None:
     """List sessions returns the pages and a total count."""
     store = MagicMock()

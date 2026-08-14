@@ -9,11 +9,13 @@ so route handlers stay thin and easy to test.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from datetime import date
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from agent_oracle.behavior import summarize_messages
 from agent_oracle.embed import Embedder
 from agent_oracle.search_summary import SearchSummarizer
 from agent_oracle.store import Store
@@ -104,6 +106,7 @@ def _register_routes(app: FastAPI) -> None:
         return {"results": payloads}
 
     _register_summary_route(app)
+    _register_behavior_route(app)
 
     @app.get("/api/entities")
     def get_entities(request: Request, session_id: str) -> dict[str, Any]:
@@ -139,6 +142,27 @@ def _register_summary_route(app: FastAPI) -> None:
             logger.warning("Search summary generation failed", exc_info=True)
             summary = ""
         return {"summary": summary}
+
+
+def _register_behavior_route(app: FastAPI) -> None:
+    """Register the OMP-compatible user behavior statistics endpoint."""
+
+    @app.get("/api/stats/behavior")
+    def behavior(
+        request: Request,
+        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp)$")] = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> dict[str, Any]:
+        """Return query-time OMP behavior metrics for real user messages."""
+        if start is not None and end is not None and start > end:
+            raise HTTPException(status_code=422, detail="start must not be after end")
+        messages = request.app.state.store.list_behavior_messages(
+            agent=agent,
+            start=start,
+            end=end,
+        )
+        return summarize_messages(messages)
 
 
 def _run_search(

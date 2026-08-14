@@ -10,11 +10,13 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import sqlite_vec
 
+from agent_oracle.behavior_store import list_behavior_messages as query_behavior_messages
 from agent_oracle.models import Session
 
 logger = logging.getLogger(__name__)
@@ -429,6 +431,16 @@ class Store:
             (limit, offset),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def list_behavior_messages(
+        self,
+        *,
+        agent: str | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> list[dict]:
+        """Return real user messages with session fields for behavior statistics."""
+        return query_behavior_messages(self.conn, agent=agent, start=start, end=end)
 
     def is_session_indexed(self, session_id: str) -> bool:
         """Return True if *session_id* exists and has been enriched."""

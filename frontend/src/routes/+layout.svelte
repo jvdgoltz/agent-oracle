@@ -26,6 +26,7 @@
 			<span class="logo-icon">◈</span>
 			<span class="logo-text">Agent Oracle</span>
 		</a>
+		<a class="stats-link" href={resolve('/stats/behavior')}>User behavior</a>
 		{#if isSession}
 			<a class="back-link" href={resolve('/')}>← All sessions</a>
 		{/if}
@@ -221,6 +222,12 @@
 		font-size: 13px;
 		color: var(--muted);
 		transition: color 0.15s;
+	}
+
+	.stats-link {
+		margin-left: auto;
+		color: var(--muted);
+		font-size: 12px;
 	}
 
 	.back-link:hover {
