@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).parents[2]
 INSTALLER = PROJECT_ROOT / "install-linux.sh"
 

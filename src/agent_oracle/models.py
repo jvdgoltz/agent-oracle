@@ -75,6 +75,7 @@ class Session:
     started_at: datetime
     messages: list[Message] = field(default_factory=list)
     interruptions: list[Interruption] = field(default_factory=list)
+    title: str | None = None
 
     @property
     def interruption_models(self) -> dict[int, str | None]:

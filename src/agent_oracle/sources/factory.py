@@ -14,7 +14,12 @@ from datetime import datetime
 from pathlib import Path
 
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
-from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
+from agent_oracle.sources.common import (
+    MESSAGE_ROLES,
+    normalize_title,
+    parse_jsonl_line,
+    parse_timestamp,
+)
 
 
 def parse_factory_session(path: Path) -> Session:
@@ -25,6 +30,7 @@ def parse_factory_session(path: Path) -> Session:
     messages: list[Message] = []
     interruptions: list[Interruption] = []
     model = _read_factory_session_model(path)
+    title: str | None = None
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -35,6 +41,7 @@ def parse_factory_session(path: Path) -> Session:
         if record_type == "session_start":
             session_id = record.get("id", session_id)
             cwd = record.get("cwd", "")
+            title = normalize_title(record.get("title"))
             ts = parse_timestamp(record.get("timestamp", ""))
             if ts != datetime.fromtimestamp(0):
                 started_at = ts
@@ -56,6 +63,7 @@ def parse_factory_session(path: Path) -> Session:
         agent=AgentType.FACTORY,
         cwd=cwd,
         started_at=started_at,
+        title=title,
         messages=messages,
         interruptions=_deduplicate_interruptions(interruptions),
     )

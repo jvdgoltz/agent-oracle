@@ -12,11 +12,17 @@ Each line is a JSON object with ``type`` and ``payload`` fields:
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
-from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
+from agent_oracle.sources.common import (
+    MESSAGE_ROLES,
+    normalize_title,
+    parse_jsonl_line,
+    parse_timestamp,
+)
 
 #: Content tags that mark a user message as injected context rather than real input.
 _INJECTED_TAGS = (
@@ -85,12 +91,41 @@ def parse_codex_session(path: Path) -> Session:
 
     return Session(
         id=session_id,
+        title=_read_codex_title(path, session_id),
         agent=AgentType.CODEX,
         cwd=cwd,
         started_at=started_at,
         messages=messages,
         interruptions=interruptions,
     )
+
+
+def _read_codex_title(path: Path, session_id: str) -> str | None:
+    """Read the latest Codex thread name, falling back to state metadata."""
+    sessions_root = next((parent for parent in path.parents if parent.name == "sessions"), None)
+    if sessions_root is None:
+        return None
+    codex_home = sessions_root.parent
+    index_path = codex_home / "session_index.jsonl"
+    title = None
+    if index_path.exists():
+        for line in index_path.read_text().splitlines():
+            record = parse_jsonl_line(line)
+            if record is not None and record.get("id") == session_id:
+                title = normalize_title(record.get("thread_name")) or title
+    if title is not None:
+        return title
+    state_path = codex_home / "state_5.sqlite"
+    if not state_path.exists():
+        return None
+    try:
+        with sqlite3.connect(f"file:{state_path}?mode=ro", uri=True) as connection:
+            row = connection.execute(
+                "SELECT name, title FROM threads WHERE id = ?", (session_id,)
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    return normalize_title(row[0]) or normalize_title(row[1]) if row is not None else None
 
 
 def _last_user_message_seq(messages: list[Message]) -> int | None:

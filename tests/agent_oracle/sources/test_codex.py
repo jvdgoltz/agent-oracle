@@ -60,6 +60,29 @@ def test_parse_basic_session(tmp_path: Path) -> None:
     assert session.messages[1].content == "Hi there"
 
 
+def test_parse_uses_latest_codex_thread_name(tmp_path: Path) -> None:
+    """The latest append-only Codex thread name becomes the session title."""
+    codex_home = tmp_path / ".codex"
+    session_dir = codex_home / "sessions" / "2026" / "08" / "21"
+    session_dir.mkdir(parents=True)
+    path = session_dir / "rollout-sess-title.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "sess-title", "cwd": "/tmp", "timestamp": "2026-01-01Z"},
+            }
+        )
+        + "\n"
+    )
+    (codex_home / "session_index.jsonl").write_text(
+        '{"id":"sess-title","thread_name":"Old title","updated_at":"one"}\n'
+        '{"id":"sess-title","thread_name":"Current title","updated_at":"two"}\n'
+    )
+
+    assert parse_codex_session(path).title == "Current title"
+
+
 def test_parse_skips_non_message_records(tmp_path: Path) -> None:
     """Event messages and turn contexts are skipped."""
     lines = [

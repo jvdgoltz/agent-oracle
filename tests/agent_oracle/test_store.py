@@ -28,6 +28,7 @@ def _make_session(
     agent: AgentType = AgentType.CODEX,
     messages: list[Message] | None = None,
     started_at: datetime | None = None,
+    title: str | None = "Fix session titles",
 ) -> Session:
     """Build a minimal :class:`Session` for testing."""
     ts = started_at or datetime(2026, 1, 1, tzinfo=UTC)
@@ -36,6 +37,7 @@ def _make_session(
         agent=agent,
         cwd="/tmp/project",
         started_at=ts,
+        title=title,
         messages=messages or [],
     )
 
@@ -52,9 +54,7 @@ def _make_message(
     )
 
 
-# --------------------------------------------------------------------------- #
 # Schema / initialization
-# --------------------------------------------------------------------------- #
 
 
 def test_init_creates_tables(store: Store) -> None:
@@ -84,9 +84,7 @@ def test_init_creates_indexes(store: Store) -> None:
     assert "idx_entities_session_id" in names
 
 
-# --------------------------------------------------------------------------- #
 # index_session
-# --------------------------------------------------------------------------- #
 
 
 def test_index_session_inserts_session_and_messages(store: Store) -> None:
@@ -100,11 +98,12 @@ def test_index_session_inserts_session_and_messages(store: Store) -> None:
     store.index_session(session)
 
     row = store.conn.execute(
-        "SELECT id, agent, cwd FROM sessions WHERE id = ?", ("sess-001",)
+        "SELECT id, agent, cwd, title FROM sessions WHERE id = ?", ("sess-001",)
     ).fetchone()
     assert row is not None
     assert row[0] == "sess-001"
     assert row[1] == "codex"
+    assert row[3] == "Fix session titles"
 
     count = store.conn.execute(
         "SELECT COUNT(*) FROM messages WHERE session_id = ?", ("sess-001",)
@@ -156,9 +155,7 @@ def test_index_session_upsert_clears_old_fts(store: Store) -> None:
     assert stale == 0
 
 
-# --------------------------------------------------------------------------- #
 # upsert_embedding
-# --------------------------------------------------------------------------- #
 
 
 def test_upsert_embedding_inserts_vector(store: Store) -> None:
@@ -194,9 +191,7 @@ def test_upsert_embedding_replaces_existing(store: Store) -> None:
     assert results_new[0]["distance"] == pytest.approx(0.0, abs=1e-5)
 
 
-# --------------------------------------------------------------------------- #
 # upsert_entities
-# --------------------------------------------------------------------------- #
 
 
 def test_upsert_entities_inserts_rows(store: Store) -> None:
@@ -227,9 +222,7 @@ def test_upsert_entities_replaces_existing(store: Store) -> None:
     assert entities[0]["entity_value"] == "new.py"
 
 
-# --------------------------------------------------------------------------- #
 # search_text
-# --------------------------------------------------------------------------- #
 
 
 def test_search_text_returns_matching_sessions(store: Store) -> None:
@@ -278,9 +271,7 @@ def test_merge_by_score_drops_null_rank_rows() -> None:
     assert [r["rank"] for r in merged] == [-0.5]
 
 
-# --------------------------------------------------------------------------- #
 # search_vector
-# --------------------------------------------------------------------------- #
 
 
 def test_search_vector_returns_nearest(store: Store) -> None:
@@ -318,9 +309,7 @@ def test_search_vector_no_results(store: Store) -> None:
     assert results == []
 
 
-# --------------------------------------------------------------------------- #
 # search_hybrid
-# --------------------------------------------------------------------------- #
 
 
 def test_search_hybrid_fuses_results(store: Store) -> None:
@@ -413,9 +402,7 @@ def test_search_hybrid_ranks_dual_source_messages_highest(store: Store) -> None:
     assert results[0]["message_id"] == both_msg_id
 
 
-# --------------------------------------------------------------------------- #
 # list_sessions
-# --------------------------------------------------------------------------- #
 
 
 def test_list_sessions_most_recent_first(store: Store) -> None:
@@ -456,9 +443,7 @@ def test_list_sessions_respects_limit_and_offset(store: Store) -> None:
     assert page[0]["id"] != page2[0]["id"]
 
 
-# --------------------------------------------------------------------------- #
 # get_session
-# --------------------------------------------------------------------------- #
 
 
 def test_get_session_returns_session_with_messages(store: Store) -> None:
@@ -490,9 +475,7 @@ def test_get_session_returns_none_for_missing(store: Store) -> None:
     assert store.get_session("does-not-exist") is None
 
 
-# --------------------------------------------------------------------------- #
 # get_entities
-# --------------------------------------------------------------------------- #
 
 
 def test_get_entities_returns_empty_for_missing(store: Store) -> None:

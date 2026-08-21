@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from agent_oracle.agent_session import AgentSessionManager, AgentSessionState
-from agent_oracle.api import _sse_events, create_app
+from agent_oracle.api import _agent_repo_root, _sse_events, create_app
 from agent_oracle.models import AgentType, Message, MessageRole, Session
 
 
@@ -118,7 +118,7 @@ def test_archived_agent_session_loads_source_transcript_without_starting_codex(
     archived = {
         "id": "saved-thread",
         "agent": "codex",
-        "cwd": "/Users/jvdgoltz/Projects/agent-oracle",
+        "cwd": _agent_repo_root(),
         "messages": [{"role": "user", "content": "Earlier work"}],
     }
     store = MagicMock()
@@ -127,7 +127,7 @@ def test_archived_agent_session_loads_source_transcript_without_starting_codex(
     source = Session(
         id="saved-thread",
         agent=AgentType.CODEX,
-        cwd="/Users/jvdgoltz/Projects/agent-oracle",
+        cwd=_agent_repo_root(),
         started_at=datetime(2026, 8, 14),
         messages=[
             Message(
@@ -153,7 +153,7 @@ def test_archived_agent_follow_up_resumes_after_a_server_reload() -> None:
     store.get_session.return_value = {
         "id": "saved-thread",
         "agent": "codex",
-        "cwd": "/Users/jvdgoltz/Projects/agent-oracle",
+        "cwd": _agent_repo_root(),
     }
     manager = MagicMock()
     manager.has_thread.return_value = False
@@ -190,7 +190,7 @@ def test_resume_candidates_read_past_the_first_page() -> None:
     """All archived pages are inspected instead of silently truncating at 200."""
     store = MagicMock()
     first_page = [{"id": str(index), "agent": "claude", "cwd": "/tmp"} for index in range(200)]
-    second_page = [{"id": "keep", "agent": "codex", "cwd": "/Users/jvdgoltz/Projects/agent-oracle"}]
+    second_page = [{"id": "keep", "agent": "codex", "cwd": _agent_repo_root()}]
     store.list_sessions.side_effect = [first_page, second_page]
     app = create_app(store, MagicMock(), agent_manager=MagicMock())
 
@@ -239,8 +239,8 @@ def test_agent_resume_candidates_only_include_this_codex_repository() -> None:
     """Only archived Codex threads from the current repository are resumable."""
     store = MagicMock()
     store.list_sessions.return_value = [
-        {"id": "keep", "agent": "codex", "cwd": "/Users/jvdgoltz/Projects/agent-oracle"},
-        {"id": "other-agent", "agent": "claude", "cwd": "/Users/jvdgoltz/Projects/agent-oracle"},
+        {"id": "keep", "agent": "codex", "cwd": _agent_repo_root()},
+        {"id": "other-agent", "agent": "claude", "cwd": _agent_repo_root()},
         {"id": "other-repo", "agent": "codex", "cwd": "/tmp/other"},
     ]
     app = create_app(store, MagicMock(), agent_manager=MagicMock())

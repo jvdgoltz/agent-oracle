@@ -17,7 +17,7 @@ from agent_oracle.store import Store
 
 logger = logging.getLogger(__name__)
 
-_SESSION_FIELDS = ("agent", "cwd", "started_at")
+_SESSION_FIELDS = ("agent", "cwd", "title", "started_at")
 
 
 def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:

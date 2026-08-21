@@ -50,6 +50,7 @@ interface Entity {
 /** Summary record returned when listing sessions. */
 export interface SessionSummary {
 	id: string;
+	title: string | null;
 	agent: string;
 	cwd: string;
 	started_at: string;
@@ -60,6 +61,7 @@ export interface SessionSummary {
 /** Full session detail including messages and entities. */
 export interface SessionDetail {
 	id: string;
+	title: string | null;
 	agent: string;
 	cwd: string;
 	started_at: string;
@@ -71,6 +73,7 @@ export interface SessionDetail {
 /** A single search hit across sessions. */
 export interface SearchResult {
 	session_id: string;
+	title: string | null;
 	agent: string | null;
 	cwd: string | null;
 	started_at: string | null;
