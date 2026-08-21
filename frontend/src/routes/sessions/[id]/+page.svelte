@@ -118,6 +118,10 @@
 			<time class="time ml-auto">{relativeTime(session.started_at)}</time>
 		</div>
 
+		{#if session.title}
+			<h1 class="session-title">{session.title}</h1>
+		{/if}
+
 		{#if session.summary}
 			<p class="session-summary">{session.summary}</p>
 		{/if}
@@ -208,6 +212,14 @@
 
 	.ml-auto {
 		margin-left: auto;
+	}
+
+	.session-title {
+		margin: 0;
+		font-size: 24px;
+		font-weight: 650;
+		line-height: 1.25;
+		color: var(--text);
 	}
 
 	.session-summary {

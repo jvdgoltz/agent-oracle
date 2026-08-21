@@ -16,7 +16,12 @@ from datetime import datetime
 from pathlib import Path
 
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
-from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
+from agent_oracle.sources.common import (
+    MESSAGE_ROLES,
+    normalize_title,
+    parse_jsonl_line,
+    parse_timestamp,
+)
 
 _MESSAGE_TYPES = {"user", "assistant"}
 
@@ -29,12 +34,16 @@ def parse_claude_session(path: Path) -> Session:
     messages: list[Message] = []
     interruptions: list[Interruption] = []
     assistant_models: dict[str, str | None] = {}
+    title: str | None = None
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
         if record is None:
             continue
         record_type = record.get("type", "")
+
+        if record_type == "custom-title":
+            title = normalize_title(record.get("customTitle")) or title
 
         if record_type not in _MESSAGE_TYPES:
             continue
@@ -66,6 +75,7 @@ def parse_claude_session(path: Path) -> Session:
         agent=AgentType.CLAUDE,
         cwd=cwd,
         started_at=started_at,
+        title=title,
         messages=messages,
         interruptions=_deduplicate_interruptions(interruptions),
     )

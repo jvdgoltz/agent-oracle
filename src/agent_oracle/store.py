@@ -81,6 +81,7 @@ class Store:
                 id        TEXT PRIMARY KEY,
                 agent     TEXT,
                 cwd       TEXT,
+                title     TEXT,
                 started_at TEXT,
                 summary   TEXT,
                 enriched  INTEGER DEFAULT 0
@@ -123,8 +124,6 @@ class Store:
             f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_messages "
             f"USING vec0(embedding float[{_EMBED_DIM}])"
         )
-        # Summary indexes keyed by the sessions rowid so session-level
-        # enrichment becomes searchable alongside messages.
         self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(summary)")
         self.conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_sessions "
@@ -132,21 +131,21 @@ class Store:
         )
         self.conn.commit()
 
-    # Indexing
-
     def index_session(self, session: Session) -> None:
         """Insert or replace *session* and its messages (regular table + FTS5)."""
         self._delete_session_messages(session.id)
         interrupted_messages = session.interruption_models
         self.conn.execute(
-            "INSERT OR REPLACE INTO sessions (id, agent, cwd, started_at, summary, enriched) "
-            "VALUES (?, ?, ?, ?, "
+            "INSERT OR REPLACE INTO sessions "
+            "(id, agent, cwd, title, started_at, summary, enriched) "
+            "VALUES (?, ?, ?, ?, ?, "
             "(SELECT summary FROM sessions WHERE id = ?), "
             "COALESCE((SELECT enriched FROM sessions WHERE id = ?), 0))",
             (
                 session.id,
                 session.agent.value,
                 session.cwd,
+                session.title,
                 session.started_at.isoformat(),
                 session.id,
                 session.id,
@@ -289,8 +288,6 @@ class Store:
         logger.info("Backfilled summary indexes: %d FTS, %d vectors", len(need_fts), len(need_vec))
         return len(need_fts) + len(need_vec)
 
-    # Search
-
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """FTS5 BM25 search over messages and session summaries."""
         fts_query = _sanitize_fts_query(query)
@@ -302,6 +299,7 @@ class Store:
                    m.id                AS message_id,
                    s.agent             AS agent,
                    s.cwd               AS cwd,
+                   s.title      AS title,
                    s.started_at        AS started_at,
                    s.summary           AS summary,
                    snippet(messages_fts, 0, '[', ']', '...', 8) AS snippet,
@@ -321,6 +319,7 @@ class Store:
                    NULL                              AS message_id,
                    s.agent                           AS agent,
                    s.cwd                             AS cwd,
+                   s.title      AS title,
                    s.started_at                      AS started_at,
                    s.summary                         AS summary,
                    snippet(sessions_fts, 0, '[', ']', '...', 8) AS snippet,
@@ -344,6 +343,7 @@ class Store:
                    m.id         AS message_id,
                    s.agent      AS agent,
                    s.cwd        AS cwd,
+                   s.title      AS title,
                    s.started_at AS started_at,
                    s.summary    AS summary,
                    v.distance  AS distance
@@ -361,6 +361,7 @@ class Store:
                    NULL        AS message_id,
                    s.agent     AS agent,
                    s.cwd       AS cwd,
+                   s.title      AS title,
                    s.started_at AS started_at,
                    s.summary   AS summary,
                    v.distance  AS distance
@@ -405,6 +406,7 @@ class Store:
                 "message_id": meta[key].get("message_id"),
                 "agent": meta[key].get("agent"),
                 "cwd": meta[key].get("cwd"),
+                "title": meta[key].get("title"),
                 "started_at": meta[key].get("started_at"),
                 "summary": meta[key].get("summary"),
                 "snippet": meta[key].get("snippet", ""),
@@ -413,13 +415,11 @@ class Store:
             for key, score in ranked
         ]
 
-    # Retrieval
-
     def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
         """Return sessions ordered by started_at descending with pagination."""
         rows = self.conn.execute(
             """
-            SELECT id, agent, cwd, started_at, summary, enriched
+            SELECT id, agent, cwd, title, started_at, summary, enriched
             FROM sessions
             ORDER BY started_at DESC
             LIMIT ? OFFSET ?
@@ -454,7 +454,8 @@ class Store:
     def get_session(self, session_id: str) -> dict | None:
         """Return the session and all its messages, or None if not found."""
         row = self.conn.execute(
-            "SELECT id, agent, cwd, started_at, summary, enriched FROM sessions WHERE id = ?",
+            "SELECT id, agent, cwd, title, started_at, summary, enriched "
+            "FROM sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
         if row is None:

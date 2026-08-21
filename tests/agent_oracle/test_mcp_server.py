@@ -17,6 +17,7 @@ SESSION = {
     "id": "s1",
     "agent": "codex",
     "cwd": "/tmp/project",
+    "title": "Fix flaky test",
     "started_at": "2025-01-01T00:00:00",
     "summary": "Debugged the flaky test.",
     "enriched": 0,
@@ -32,6 +33,7 @@ SEARCH_RESULTS = [
         "score": 0.5,
         "agent": "codex",
         "cwd": "/tmp/project",
+        "title": "Fix flaky test",
         "started_at": "2025-01-01T00:00:00",
     }
 ]
@@ -60,7 +62,7 @@ class _FakeStore:
 
     def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
         """Return a fake recent-sessions listing."""
-        keys = ("id", "agent", "cwd", "started_at", "summary", "enriched")
+        keys = ("id", "agent", "cwd", "title", "started_at", "summary", "enriched")
         return [{k: SESSION[k] for k in keys}]
 
 
@@ -130,6 +132,7 @@ def test_search_sessions_text_mode() -> None:
 
     assert results[0]["session_id"] == "s1"
     assert results[0]["agent"] == "codex"
+    assert results[0]["title"] == "Fix flaky test"
 
 
 def test_search_sessions_vector_mode() -> None:

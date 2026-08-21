@@ -459,6 +459,7 @@ def _payload(result: SearchResult, entities: list[dict]) -> SearchResult:
         "session_id": result.get("session_id"),
         "agent": result.get("agent"),
         "cwd": result.get("cwd"),
+        "title": result.get("title"),
         "started_at": result.get("started_at"),
         "summary": result.get("summary"),
         "entities": entities,

@@ -50,6 +50,19 @@ def test_parse_basic_session(tmp_path: Path) -> None:
     assert session.messages[1].content == "Hi from claude"
 
 
+def test_parse_uses_latest_custom_title(tmp_path: Path) -> None:
+    """The latest Claude custom-title record becomes the session title."""
+    path = _write_jsonl(
+        tmp_path,
+        [
+            {"type": "custom-title", "customTitle": "Old title"},
+            {"type": "custom-title", "customTitle": "Current title"},
+        ],
+    )
+
+    assert parse_claude_session(path).title == "Current title"
+
+
 def test_parse_skips_non_message_records(tmp_path: Path) -> None:
     """Queue operations and attachments are skipped."""
     lines = [

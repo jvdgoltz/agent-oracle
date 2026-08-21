@@ -30,6 +30,11 @@ def parse_timestamp(raw: str) -> datetime:
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
 
 
+def normalize_title(value: object) -> str | None:
+    """Return a stripped non-empty title string, or None."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def parse_jsonl_line(line: str) -> dict | None:
     """Parse one JSONL line, returning None for blank or truncated lines.
 

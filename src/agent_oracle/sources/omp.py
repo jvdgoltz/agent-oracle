@@ -17,7 +17,12 @@ from datetime import datetime
 from pathlib import Path
 
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
-from agent_oracle.sources.common import MESSAGE_ROLES, parse_jsonl_line, parse_timestamp
+from agent_oracle.sources.common import (
+    MESSAGE_ROLES,
+    normalize_title,
+    parse_jsonl_line,
+    parse_timestamp,
+)
 
 
 def parse_omp_session(path: Path) -> Session:
@@ -27,12 +32,18 @@ def parse_omp_session(path: Path) -> Session:
     started_at = datetime.fromtimestamp(0)
     messages: list[Message] = []
     interruptions: list[Interruption] = []
+    title_slot: str | None = None
+    header_title: str | None = None
+    changed_title: str | None = None
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
         if record is None:
             continue
         record_type = record.get("type")
+        title_slot, header_title, changed_title = _update_titles(
+            record, title_slot, header_title, changed_title
+        )
 
         if record_type == "session":
             session_id = record.get("id", session_id)
@@ -71,9 +82,27 @@ def parse_omp_session(path: Path) -> Session:
         agent=AgentType.OMP,
         cwd=cwd,
         started_at=started_at,
+        title=title_slot or changed_title or header_title,
         messages=messages,
         interruptions=interruptions,
     )
+
+
+def _update_titles(
+    record: dict,
+    title_slot: str | None,
+    header_title: str | None,
+    changed_title: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Apply one OMP title-bearing record to accumulated title state."""
+    record_type = record.get("type")
+    if record_type == "title":
+        title_slot = normalize_title(record.get("title")) or title_slot
+    elif record_type == "session":
+        header_title = normalize_title(record.get("title")) or header_title
+    elif record_type == "title_change":
+        changed_title = normalize_title(record.get("title")) or changed_title
+    return title_slot, header_title, changed_title
 
 
 def _last_user_message_seq(messages: list[Message]) -> int | None:

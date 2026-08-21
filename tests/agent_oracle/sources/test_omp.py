@@ -56,6 +56,7 @@ def test_parse_basic_session(tmp_path: Path) -> None:
     assert session.id == "omp-001"
     assert session.agent is AgentType.OMP
     assert session.cwd == "/tmp/project"
+    assert session.title == "Demo"
     assert session.started_at.isoformat() == "2026-08-05T10:00:00+00:00"
     assert len(session.messages) == 2
     assert session.messages[0].role is MessageRole.USER
@@ -86,6 +87,20 @@ def test_parse_skips_non_message_records(tmp_path: Path) -> None:
 
     assert len(session.messages) == 1
     assert session.messages[0].content == "actual message"
+
+
+def test_parse_uses_title_slot_over_header_and_changes(tmp_path: Path) -> None:
+    """OMP current title slot overrides legacy title metadata."""
+    path = _write_jsonl(
+        tmp_path,
+        [
+            {"type": "title", "title": "Current title", "source": "user"},
+            _session_record(),
+            {"type": "title_change", "title": "Legacy change"},
+        ],
+    )
+
+    assert parse_omp_session(path).title == "Current title"
 
 
 def test_parse_skips_tool_traffic_roles(tmp_path: Path) -> None:

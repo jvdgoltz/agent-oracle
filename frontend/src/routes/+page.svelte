@@ -277,6 +277,9 @@
 									<time class="time ml-auto">{relativeTime(result.started_at)}</time>
 								{/if}
 							</div>
+							{#if result.title}
+								<h3 class="card-title">{result.title}</h3>
+							{/if}
 							{#if result.summary}
 								<p class="card-summary">{result.summary}</p>
 							{/if}
@@ -329,6 +332,9 @@
 							<code class="cwd">{session.cwd}</code>
 							<time class="time ml-auto">{relativeTime(session.started_at)}</time>
 						</div>
+						{#if session.title}
+							<h3 class="card-title">{session.title}</h3>
+						{/if}
 						{#if session.summary}
 							<p class="card-summary">{session.summary}</p>
 						{/if}
@@ -381,7 +387,7 @@
 				<option value="">Start a new session</option>
 				{#each resumeCandidates as candidate (candidate.id)}
 					<option value={candidate.id}>
-						Resume {candidate.summary || candidate.id}
+						Resume {candidate.title || candidate.summary || candidate.id}
 					</option>
 				{/each}
 			</select>
@@ -653,6 +659,18 @@
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 		color: var(--subtle);
+	}
+
+	.card-title {
+		margin: 0;
+		font-size: 15px;
+		font-weight: 600;
+		color: var(--text);
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
 
 	.card-summary {

@@ -50,6 +50,7 @@ def test_parse_basic_session(tmp_path: Path) -> None:
     assert session.id == "fac-001"
     assert session.agent is AgentType.FACTORY
     assert session.cwd == "/tmp/project"
+    assert session.title == "Test Session"
     assert len(session.messages) == 2
     assert session.messages[0].role is MessageRole.USER
     assert session.messages[0].content == "Hello factory"

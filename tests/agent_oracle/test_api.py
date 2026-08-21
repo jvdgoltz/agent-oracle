@@ -71,6 +71,7 @@ def test_list_sessions_returns_paginated_results() -> None:
             "id": "s2",
             "agent": "claude",
             "cwd": "/p2",
+            "title": "Claude title",
             "started_at": "2026-01-02T00:00:00+00:00",
             "summary": None,
             "enriched": 0,
@@ -97,7 +98,7 @@ def test_list_sessions_returns_paginated_results() -> None:
     assert body["total"] == 2
     store.list_sessions.assert_called_once_with(limit=10, offset=5)
 
-    for key in ("agent", "cwd", "summary"):
+    for key in ("agent", "cwd", "title", "summary"):
         assert body["sessions"][0][key] == sessions[0][key]
 
 
@@ -169,6 +170,7 @@ def test_search_text_mode_does_not_embed() -> None:
             "session_id": "s1",
             "agent": None,
             "cwd": None,
+            "title": None,
             "started_at": None,
             "summary": None,
             "entities": [],
@@ -219,6 +221,7 @@ def test_search_hybrid_embeds_query() -> None:
             "session_id": "s1",
             "agent": None,
             "cwd": None,
+            "title": None,
             "started_at": None,
             "summary": None,
             "entities": [{"type": "product", "value": "SQLite"}],
@@ -246,6 +249,7 @@ def test_search_vector_embeds_query() -> None:
             "session_id": "s2",
             "agent": None,
             "cwd": None,
+            "title": None,
             "started_at": None,
             "summary": None,
             "entities": [],
