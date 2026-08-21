@@ -24,8 +24,15 @@ cp .env.example .env          # fill in OPENAI_API_KEY
 
 ```bash
 uv run python -m agent_oracle.main                 # backend, http://localhost:8731
-cd frontend && npm run dev                     # frontend, http://localhost:8732
+cd frontend && npm run dev                         # frontend, http://localhost:8732
 ```
+
+### Linux services
+
+After installing dependencies, run `./install-linux.sh` to install and start the
+backend, frontend, and twice-daily database backup as systemd user services. Both
+apps run with hot reload, and the backend watches supported agent session directories.
+View service logs with `journalctl --user -u 'agent-oracle-*' -f`.
 
 ## Development
 
