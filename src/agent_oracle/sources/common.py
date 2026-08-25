@@ -22,6 +22,31 @@ MESSAGE_ROLES: dict[str, MessageRole] = {
     "system": MessageRole.SYSTEM,
 }
 
+# Prefixes emitted by agent runtimes as context/envelope messages.  These are
+# deliberately anchored at the start of a message so ordinary user discussion
+# mentioning one of the tags remains searchable.
+INJECTED_MESSAGE_PREFIXES = (
+    "# AGENTS.md instructions for ",
+    "<environment_context>",
+    "<system-reminder>",
+    "<permissions instructions>",
+    "<collaboration_mode>",
+    "<recommended_plugins>",
+    "<turn_aborted>",
+    "<codex_internal_context",
+    "<codex_delegation>",
+    "<realtime_delegation>",
+    "<subagent_notification>",
+    "# Task Tool Invocation",
+    "### Session update [in progress",
+    "<system-notification>",
+)
+
+
+def is_injected_message(content: str) -> bool:
+    """Return whether *content* starts with a generated runtime envelope."""
+    return content.startswith(INJECTED_MESSAGE_PREFIXES)
+
 
 def parse_timestamp(raw: str) -> datetime:
     """Parse an ISO 8601 timestamp string into a :class:`datetime`."""

@@ -18,6 +18,7 @@ from pathlib import Path
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
+    is_injected_message,
     normalize_title,
     parse_jsonl_line,
     parse_timestamp,
@@ -117,7 +118,18 @@ def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
         return []
     content = msg_data.get("content")
     model = msg_data.get("model")
-    is_injected = bool(record.get("isMeta"))
+    content_text = (
+        content
+        if isinstance(content, str)
+        else "".join(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+        )
+        if isinstance(content, list)
+        else ""
+    )
+    is_injected = bool(record.get("isMeta")) or (
+        role is MessageRole.USER and is_injected_message(content_text)
+    )
 
     def build(content_text: str, *, is_thinking: bool = False) -> Message:
         return Message(

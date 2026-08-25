@@ -297,7 +297,17 @@ def test_parse_marks_recommended_plugins_user_message_as_injected(tmp_path: Path
 
 def test_parse_marks_standalone_codex_context_markers_as_injected(tmp_path: Path) -> None:
     """Codex-injected AGENTS and environment wrappers are not user prompts."""
-    markers = ["# AGENTS.md instructions for /tmp/project\n", "<environment_context>\n"]
+    markers = [
+        "# AGENTS.md instructions for /tmp/project\n",
+        "<environment_context>\n",
+        '<codex_internal_context source="goal">\n',
+        "<codex_delegation>\n",
+        "<realtime_delegation>\n",
+        "<subagent_notification>\n",
+        "# Task Tool Invocation\n",
+        "### Session update [in progress — more steps follow]\n",
+        "<system-notification>\n",
+    ]
     for marker in markers:
         session = parse_codex_session(
             _write_jsonl(

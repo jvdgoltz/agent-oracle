@@ -19,20 +19,10 @@ from pathlib import Path
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
+    is_injected_message,
     normalize_title,
     parse_jsonl_line,
     parse_timestamp,
-)
-
-#: Content tags that mark a user message as injected context rather than real input.
-_INJECTED_TAGS = (
-    "# AGENTS.md instructions for ",
-    "<environment_context>",
-    "<system-reminder>",
-    "<permissions instructions>",
-    "<collaboration_mode>",
-    "<recommended_plugins>",
-    "<turn_aborted>",
 )
 
 
@@ -170,7 +160,7 @@ def _extract_message(payload: dict, timestamp: datetime, model: str | None) -> M
     # Model is only for assistant messages (including reasoning/thinking)
     msg_model = model if role is MessageRole.ASSISTANT else None
     is_system = role is MessageRole.DEVELOPER
-    is_injected = role is MessageRole.USER and text.startswith(_INJECTED_TAGS)
+    is_injected = role is MessageRole.USER and is_injected_message(text)
 
     return Message(
         role=role,

@@ -217,3 +217,25 @@ def test_parse_records_user_interruption(tmp_path: Path) -> None:
     assert [
         (item.source_id, item.model, item.user_message_seq) for item in session.interruptions
     ] == [("a1", "omp-model", 0)]
+
+
+def test_parse_marks_shared_generated_prefix_injected(tmp_path: Path) -> None:
+    """OMP shared envelope markers are injected without changing ordinary turns."""
+    session = parse_omp_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                _message_record(
+                    "user",
+                    [
+                        {
+                            "type": "text",
+                            "text": "### Session update [in progress — more steps follow]",
+                        }
+                    ],
+                    "u1",
+                )
+            ],
+        )
+    )
+    assert session.messages[0].is_injected is True

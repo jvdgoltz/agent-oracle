@@ -248,3 +248,14 @@ def test_parse_records_deduplicated_user_interruption(tmp_path: Path) -> None:
     assert [(message.role, message.content) for message in session.messages] == [
         (MessageRole.USER, "stop")
     ]
+
+
+def test_parse_marks_shared_generated_prefix_injected(tmp_path: Path) -> None:
+    """Claude shared envelope markers are injected while native metadata remains supported."""
+    session = parse_claude_session(
+        _write_jsonl(
+            tmp_path,
+            [{"type": "user", "message": {"role": "user", "content": "<codex_delegation>"}}],
+        )
+    )
+    assert session.messages[0].is_injected is True
