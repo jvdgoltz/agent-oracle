@@ -26,6 +26,8 @@ from agent_oracle.sources.common import (
 
 #: Content tags that mark a user message as injected context rather than real input.
 _INJECTED_TAGS = (
+    "# AGENTS.md instructions for ",
+    "<environment_context>",
     "<system-reminder>",
     "<permissions instructions>",
     "<collaboration_mode>",

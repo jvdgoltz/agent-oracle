@@ -295,6 +295,51 @@ def test_parse_marks_recommended_plugins_user_message_as_injected(tmp_path: Path
     assert session.messages[0].is_injected is True
 
 
+def test_parse_marks_standalone_codex_context_markers_as_injected(tmp_path: Path) -> None:
+    """Codex-injected AGENTS and environment wrappers are not user prompts."""
+    markers = ["# AGENTS.md instructions for /tmp/project\n", "<environment_context>\n"]
+    for marker in markers:
+        session = parse_codex_session(
+            _write_jsonl(
+                tmp_path,
+                [
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "text", "text": marker + "injected context"}],
+                        },
+                    }
+                ],
+            )
+        )
+        assert session.messages[0].is_injected is True
+
+
+def test_parse_keeps_ordinary_user_message_non_injected(tmp_path: Path) -> None:
+    """A normal user message remains searchable conversation content."""
+    session = parse_codex_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "# AGENTS.md instructions are unclear"}
+                        ],
+                    },
+                }
+            ],
+        )
+    )
+
+    assert session.messages[0].is_injected is False
+
+
 def test_load_codex_session_reads_the_matching_local_thread(tmp_path: Path) -> None:
     """A direct thread lookup loads only the requested local Codex JSONL."""
     path = tmp_path / "2026" / "08" / "14" / "rollout-2026-08-14-thread-1.jsonl"
