@@ -52,7 +52,9 @@ class Message:
     @property
     def is_searchable(self) -> bool:
         """Return True when this message should appear in the search index."""
-        return not (self.is_thinking or self.is_system_instruction or self.is_injected)
+        return self.role in (MessageRole.USER, MessageRole.ASSISTANT) and not (
+            self.is_thinking or self.is_system_instruction or self.is_injected
+        )
 
 
 @dataclass(frozen=True, slots=True)

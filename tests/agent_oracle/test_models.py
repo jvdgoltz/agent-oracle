@@ -65,6 +65,13 @@ def test_system_instruction_not_searchable() -> None:
     assert msg.is_searchable is False
 
 
+def test_system_role_not_searchable_without_metadata_flag() -> None:
+    """A system-role message is excluded even when its source flags are absent."""
+    ts = datetime.now(UTC)
+    msg = Message(role=MessageRole.SYSTEM, content="system context", timestamp=ts)
+    assert msg.is_searchable is False
+
+
 def test_injected_message_not_searchable() -> None:
     """An injected (non-user-authored) message is excluded from search."""
     ts = datetime.now(UTC)

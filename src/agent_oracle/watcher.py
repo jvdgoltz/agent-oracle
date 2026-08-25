@@ -141,7 +141,8 @@ class SessionWatcher:
         searchable = [
             m
             for m in all_messages
-            if not (m.get("is_thinking") or m.get("is_system_instruction") or m.get("is_injected"))
+            if m.get("role", "user") in ("user", "assistant")
+            and not (m.get("is_thinking") or m.get("is_system_instruction") or m.get("is_injected"))
         ]
         if not searchable:
             return

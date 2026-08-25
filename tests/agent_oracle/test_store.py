@@ -133,12 +133,11 @@ def test_index_session_inserts_session_and_messages(store: Store) -> None:
 
 def test_index_session_populates_fts(store: Store) -> None:
     """Indexed message content is searchable via FTS5."""
-    store.index_session(_make_session(messages=[_make_message("unique fts token")]))
-
-    count = store.conn.execute(
-        "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'unique'"
-    ).fetchone()[0]
-    assert count == 1
+    session = _make_session(messages=[_make_message("unique fts token")])
+    session.messages.extend([_make_message("secret", MessageRole.SYSTEM)])
+    session.messages.extend([_make_message("secret", MessageRole.DEVELOPER)])
+    store.index_session(session)
+    assert store.search_text("unique", limit=10) and store.search_text("secret", limit=10) == []
 
 
 def test_index_session_upsert_replaces_messages(store: Store) -> None:

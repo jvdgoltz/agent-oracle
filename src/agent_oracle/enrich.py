@@ -96,7 +96,9 @@ class Enricher:
 
     def _build_prompt(self, session: Session) -> str:
         """Concatenate message contents, truncated, into an extraction prompt."""
-        transcript = "\n".join(message.content for message in session.messages)
+        transcript = "\n".join(
+            message.content for message in session.messages if message.is_searchable
+        )
         transcript = transcript[:_MAX_PROMPT_CHARS]
         types = ", ".join(ENTITY_TYPES)
         return (

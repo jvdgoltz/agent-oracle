@@ -2,6 +2,7 @@
 
 import json
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,7 @@ from watchdog.events import FileModifiedEvent
 from agent_oracle import watcher as watcher_module
 from agent_oracle.embed import Embedder
 from agent_oracle.enrich import Enricher, EnrichmentResult, Entity
-from agent_oracle.models import AgentType, Session
+from agent_oracle.models import AgentType, Message, MessageRole, Session
 from agent_oracle.sources.claude import parse_claude_session
 from agent_oracle.sources.codex import parse_codex_session
 from agent_oracle.sources.factory import parse_factory_session
@@ -197,6 +198,51 @@ def test_index_file_routes_to_codex_normalizer(tmp_path: Path) -> None:
     store.upsert_entities.assert_called_once_with(
         "codex-sess", [{"type": "product", "value": "SQLite"}]
     )
+
+
+def test_index_file_embeds_only_ordinary_conversation_messages(tmp_path: Path) -> None:
+    """_index_file excludes internal roles, flags, and thinking from embeddings."""
+    codex_dir = tmp_path / ".codex" / "sessions"
+    codex_dir.mkdir(parents=True)
+    source = codex_dir / "filtered.jsonl"
+    source.write_text("")
+    session = Session(
+        id="filtered",
+        agent=AgentType.CODEX,
+        cwd="/tmp",
+        started_at=datetime.now(UTC),
+        messages=[
+            Message(MessageRole.USER, "ordinary user", datetime.now(UTC)),
+            Message(MessageRole.DEVELOPER, "developer secret", datetime.now(UTC)),
+            Message(MessageRole.USER, "injected secret", datetime.now(UTC), is_injected=True),
+            Message(MessageRole.ASSISTANT, "thinking secret", datetime.now(UTC), is_thinking=True),
+            Message(MessageRole.ASSISTANT, "ordinary assistant", datetime.now(UTC)),
+        ],
+    )
+    watcher, store, embedder, enricher = _make_watcher()
+    store.get_session.return_value = {
+        "messages": [
+            {
+                "id": i,
+                "role": m.role.value,
+                "content": m.content,
+                "is_thinking": m.is_thinking,
+                "is_system_instruction": m.is_system_instruction,
+                "is_injected": m.is_injected,
+            }
+            for i, m in enumerate(session.messages, 1)
+        ]
+    }
+    embedder.embed_batch.side_effect = [[[0.1, 0.2], [0.3, 0.4]], [[0.5, 0.6]]]
+    enricher.enrich.return_value = EnrichmentResult(summary="summary", entities=[])
+
+    with (
+        patch.object(watcher_module, "_HOME", tmp_path),
+        patch.dict(watcher_module._PARSERS, {AgentType.CODEX: lambda _: session}),
+    ):
+        watcher._index_file(source)
+
+    assert embedder.embed_batch.call_args_list[0].args == (["ordinary user", "ordinary assistant"],)
 
 
 def test_index_file_stores_review_session_without_embedding_or_enrichment(tmp_path: Path) -> None:
