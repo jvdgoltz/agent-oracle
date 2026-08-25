@@ -56,6 +56,24 @@ def test_upsert_session_embedding_makes_summary_vector_searchable(store: Store) 
     assert results[0]["distance"] == 0.0
 
 
+def test_clear_enrichment_removes_all_derived_summary_data(store: Store) -> None:
+    """Clearing enrichment removes summary, entities, FTS, and vector data."""
+    store.index_session(_make_session())
+    store.set_summary("sess-001", "stale summary")
+    store.upsert_entities("sess-001", [{"type": "product", "value": "SQLite"}])
+    store.upsert_session_embedding("sess-001", _make_embedding(1.0))
+
+    store.clear_enrichment("sess-001")
+
+    row = store.conn.execute(
+        "SELECT summary, enriched FROM sessions WHERE id = ?", ("sess-001",)
+    ).fetchone()
+    assert tuple(row) == (None, 0)
+    assert store.get_entities("sess-001") == []
+    assert store.search_text("stale") == []
+    assert store.search_vector(_make_embedding(1.0)) == []
+
+
 def test_search_text_merges_message_and_summary_hits(store: Store) -> None:
     """Text search returns both message-level and summary-level matches."""
     store.index_session(

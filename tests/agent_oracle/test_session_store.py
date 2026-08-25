@@ -65,6 +65,16 @@ def test_review_session_is_archived_but_hidden_by_default(store: Store) -> None:
     assert store.list_review_sessions(["parent"])["parent"][0]["id"] == "review"
 
 
+def test_review_session_can_be_reindexed_without_fts_rows(store: Store) -> None:
+    """Re-indexing a review session does not delete nonexistent FTS rows."""
+    review = _session("review", messages=[_message("review-only-term")], is_review_agent=True)
+
+    store.index_session(review)
+    store.index_session(review)
+
+    assert store.get_session("review") is not None
+
+
 def test_search_excludes_stale_review_entries(store: Store) -> None:
     """Search filters review entries left by an earlier database version."""
     store.index_session(

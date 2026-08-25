@@ -92,7 +92,7 @@ async def _lifespan(app: FastAPI):
         _watcher.stop()
 
 
-app: FastAPI = create_app(_store, _embedder, summarizer=_summarizer)
+app: FastAPI = create_app(_store, _embedder, summarizer=_summarizer, watcher=_watcher)
 app.router.lifespan_context = _lifespan
 app.mount("/mcp", _mcp_app)
 

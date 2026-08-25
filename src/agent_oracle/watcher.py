@@ -103,7 +103,29 @@ class SessionWatcher:
             for path in sorted(directory.rglob("*.jsonl")):
                 self._index_file(path, skip_if_enriched=True)
 
-    def _index_file(self, path: Path, skip_if_enriched: bool = False) -> None:
+    def reindex_session(self, session_id: str, *, clear_existing: bool = False) -> bool:
+        """Re-index the watched source file belonging to ``session_id``."""
+        for directory in _watched_dirs().values():
+            if not directory.exists():
+                continue
+            for path in directory.rglob("*.jsonl"):
+                parser = self._detect_parser(path)
+                if parser is None:
+                    continue
+                try:
+                    if parser(path).id == session_id:
+                        if clear_existing:
+                            self.store.clear_enrichment(session_id)
+                        return self._index_file(path, raise_errors=True)
+                except Exception as exc:
+                    if session_id in path.name:
+                        raise exc
+                    logger.debug("Unable to inspect session file %s", path, exc_info=True)
+        return False
+
+    def _index_file(
+        self, path: Path, skip_if_enriched: bool = False, *, raise_errors: bool = False
+    ) -> bool:
         """Parse, store, embed, and enrich a single session file.
 
         When *skip_if_enriched* is True (used during bulk re-index on startup),
@@ -111,25 +133,29 @@ class SessionWatcher:
         redundant re-processing after restarts.
         """
         if path.suffix != ".jsonl":
-            return
+            return False
         parser = self._detect_parser(path)
         if parser is None:
             logger.debug("Skipping file outside watched dirs: %s", path)
-            return
+            return False
         try:
             session = parser(path)
             if skip_if_enriched and self.store.is_session_indexed(session.id):
                 logger.debug("Skipping already-enriched session %s", session.id)
-                return
+                return False
             self.store.index_session(session)
             if session.is_review_agent:
                 logger.info("Stored unindexed Codex review session %s", session.id)
-                return
+                return False
             self._embed_messages(session)
-            self._enrich_session(session)
+            self._enrich_session(session, raise_errors=raise_errors)
             logger.info("Indexed session %s (%s)", session.id, session.agent.value)
+            return True
         except Exception:
+            if raise_errors:
+                raise
             logger.error("Failed to index session file %s", path, exc_info=True)
+            return False
 
     def _embed_messages(self, session: Session) -> None:
         """Batch-embed searchable messages in a session and store the vectors."""
@@ -151,11 +177,14 @@ class SessionWatcher:
         for msg, embedding in zip(searchable, embeddings, strict=True):
             self.store.upsert_embedding(msg["id"], embedding)
 
-    def _enrich_session(self, session: Session) -> None:
+    def _enrich_session(self, session: Session, *, raise_errors: bool = False) -> None:
         """Enrich the session with the LLM and persist summary and entities."""
+        self.store.clear_enrichment(session.id)
         try:
             result: EnrichmentResult = self.enricher.enrich(session)
         except RuntimeError as exc:
+            if raise_errors:
+                raise
             logger.warning("Skipping enrichment for %s: %s", session.id, exc)
             return
         self.store.set_summary(session.id, result.summary)

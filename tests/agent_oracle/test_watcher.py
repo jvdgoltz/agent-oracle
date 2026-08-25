@@ -267,7 +267,8 @@ def test_index_file_stores_review_session_without_embedding_or_enrichment(tmp_pa
     watcher, store, embedder, enricher = _make_watcher()
 
     with patch.object(watcher_module, "_HOME", tmp_path):
-        watcher._index_file(source)
+        assert watcher._index_file(source) is False
+        assert watcher.reindex_session("review-sess", clear_existing=True) is False
 
     stored = store.index_session.call_args.args[0]
     assert stored.is_review_agent
@@ -423,6 +424,38 @@ def test_index_existing_discovers_all_watched_dirs(tmp_path: Path) -> None:
     assert factory.exists()
     assert claude.exists()
     assert omp.exists()
+
+
+def test_reindex_session_processes_only_matching_source(tmp_path: Path) -> None:
+    """Targeted re-indexing finds and processes only the requested session."""
+    dirs = _map_dirs(tmp_path)
+    matching = _codex_jsonl(dirs[AgentType.CODEX])
+    other = dirs[AgentType.CODEX] / "other.jsonl"
+    other.write_text(matching.read_text().replace("codex-sess", "other-sess"))
+    watcher, store, _embedder, enricher = _make_watcher()
+    store.get_session.return_value = {"messages": []}
+    enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
+    matching.write_text(matching.read_text().replace("hi", "changed"))
+
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        assert watcher.reindex_session("codex-sess")
+
+    assert store.index_session.call_args.args[0].messages[0].content == "changed"
+    assert not watcher.reindex_session("missing")
+
+
+def test_reindex_missing_source_preserves_existing_enrichment(tmp_path: Path) -> None:
+    """A missing source does not clear existing enrichment data."""
+    watcher, store, _embedder, _enricher = _make_watcher()
+    store.get_session.return_value = {
+        "summary": "stale",
+        "entities": [{"entity_value": "keep"}],
+        "session_id": "missing",
+    }
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        assert watcher.reindex_session("missing", clear_existing=True) is False
+    store.clear_enrichment.assert_not_called()
+    assert store.get_session.return_value["summary"] == "stale"
 
 
 def test_debounce_cancels_and_reschedules_timer() -> None:

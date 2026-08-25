@@ -2,7 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import AgentBadge from '$lib/AgentBadge.svelte';
-	import { getSession, type Message, type SessionDetail } from '$lib/api';
+	import { enrichSession, getSession, type Message, type SessionDetail } from '$lib/api';
 	import { relativeTime } from '$lib/format';
 	import { renderMarkdown } from '$lib/markdown';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -13,6 +13,8 @@
 	let session: SessionDetail | null = $state(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let enriching = $state(false);
+	let enrichError = $state<string | null>(null);
 
 	/** Messages ordered oldest-first for display. */
 	let orderedMessages: { entry: Message; key: string; html: string }[] = $state([]);
@@ -82,6 +84,20 @@
 		load();
 	});
 
+	/** Re-index and enrich this session, then refresh the displayed detail. */
+	async function handleEnrich(): Promise<void> {
+		enriching = true;
+		enrichError = null;
+		try {
+			await enrichSession(id);
+		} catch (e) {
+			enrichError = e instanceof Error ? e.message : 'Failed to enrich session';
+		} finally {
+			await load();
+			enriching = false;
+		}
+	}
+
 	/** Human-readable label for a message type. */
 	function roleLabel(entry: Message): string {
 		if (entry.is_thinking) return 'Thinking';
@@ -126,6 +142,13 @@
 		{#if session.summary}
 			<p class="session-summary">{session.summary}</p>
 		{/if}
+
+		<div class="enrich-controls">
+			<button class="metadata-toggle" onclick={handleEnrich} disabled={enriching}>
+				{enriching ? 'Enriching…' : 'Enrich'}
+			</button>
+			{#if enrichError}<span class="error">{enrichError}</span>{/if}
+		</div>
 
 		{#if session.entities && session.entities.length > 0}
 			<div class="entities">

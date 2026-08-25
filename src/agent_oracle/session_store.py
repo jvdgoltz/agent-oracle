@@ -5,6 +5,36 @@ from __future__ import annotations
 import sqlite3
 
 
+def delete_session_messages(
+    connection: sqlite3.Connection, session_id: str, *, delete_search_entries: bool
+) -> None:
+    """Remove session messages and their search entries when present."""
+    if delete_search_entries:
+        connection.execute(
+            "DELETE FROM messages_fts WHERE rowid IN "
+            "(SELECT id FROM messages WHERE session_id = ?)",
+            (session_id,),
+        )
+        connection.execute(
+            "DELETE FROM vec_messages WHERE rowid IN "
+            "(SELECT id FROM messages WHERE session_id = ?)",
+            (session_id,),
+        )
+    connection.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+
+
+def clear_enrichment(connection: sqlite3.Connection, session_id: str) -> None:
+    """Clear summary, entities, and summary indexes for one session."""
+    row = connection.execute("SELECT rowid FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    connection.execute("DELETE FROM entities WHERE session_id = ?", (session_id,))
+    connection.execute(
+        "UPDATE sessions SET summary = NULL, enriched = 0 WHERE id = ?", (session_id,)
+    )
+    if row is not None:
+        connection.execute("DELETE FROM sessions_fts WHERE rowid = ?", (row[0],))
+        connection.execute("DELETE FROM vec_sessions WHERE rowid = ?", (row[0],))
+
+
 def list_sessions(
     connection: sqlite3.Connection,
     limit: int,

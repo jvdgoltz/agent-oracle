@@ -220,6 +220,11 @@ export function getResumableAgentSessions(): Promise<ResumableAgentSessions> {
 	return get('/api/agent/sessions');
 }
 
+/** Re-index and enrich one archived session from its source file. */
+export function enrichSession(sessionId: string): Promise<{ status: string }> {
+	return post(`/api/sessions/${encodeURIComponent(sessionId)}/enrich`);
+}
+
 /** Load an archived Codex transcript without starting a turn. */
 export function getArchivedAgentSession(threadId: string): Promise<SessionDetail> {
 	return get(`/api/agent/sessions/${encodeURIComponent(threadId)}`);

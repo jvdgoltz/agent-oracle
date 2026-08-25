@@ -12,7 +12,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from datetime import date
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,8 +25,12 @@ from agent_oracle.behavior import summarize_messages
 from agent_oracle.embed import Embedder
 from agent_oracle.overview_summary import summarize_overview
 from agent_oracle.search_summary import SearchSummarizer
+from agent_oracle.session_api import register_enrich_route, register_summary_route
 from agent_oracle.sources.codex import load_codex_session
 from agent_oracle.store import Store
+
+if TYPE_CHECKING:
+    from agent_oracle.watcher import SessionWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ def create_app(
     embedder: Embedder,
     summarizer: SearchSummarizer | None = None,
     agent_manager: AgentSessionManager | None = None,
+    watcher: SessionWatcher | None = None,
 ) -> FastAPI:
     """Build and configure the Agent Oracle FastAPI application.
 
@@ -52,6 +57,7 @@ def create_app(
     app.state.embedder = embedder
     app.state.summarizer = summarizer
     app.state.agent_manager = agent_manager or AgentSessionManager()
+    app.state.watcher = watcher
 
     app.add_middleware(
         CORSMiddleware,
@@ -129,7 +135,8 @@ def _register_routes(app: FastAPI) -> None:
         ]
         return {"results": payloads}
 
-    _register_summary_route(app)
+    register_summary_route(app)
+    register_enrich_route(app)
     _register_behavior_route(app)
     _register_overview_route(app)
     _register_agent_routes(app)
@@ -139,35 +146,6 @@ def _register_routes(app: FastAPI) -> None:
         """Return the enriched entities recorded for *session_id*."""
         session_entities = request.app.state.store.get_entities(session_id)
         return {"entities": session_entities}
-
-
-def _register_summary_route(app: FastAPI) -> None:
-    """Register the POST /api/search/summary endpoint."""
-
-    @app.post("/api/search/summary")
-    def search_summary(
-        request: Request,
-        body: dict[str, Any],
-    ) -> dict[str, str]:
-        """Generate an AI summary of search results for a given query.
-
-        Accepts a JSON body with ``query`` and ``results`` (the search payloads)
-        and returns ``{"summary": "..."}``. Returns an empty summary if no
-        summarizer is configured or the agent run fails.
-        """
-        summarizer = request.app.state.summarizer
-        if summarizer is None:
-            return {"summary": ""}
-        query = body.get("query", "")
-        results = body.get("results", [])
-        if not results:
-            return {"summary": ""}
-        try:
-            summary = summarizer.summarize(query, results)
-        except Exception:
-            logger.warning("Search summary generation failed", exc_info=True)
-            summary = ""
-        return {"summary": summary}
 
 
 def _register_behavior_route(app: FastAPI) -> None:

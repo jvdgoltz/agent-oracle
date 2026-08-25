@@ -155,7 +155,7 @@ class Store:
 
     def index_session(self, session: Session) -> None:
         """Insert or replace *session* and its messages (regular table + FTS5)."""
-        self._delete_session_messages(session.id)
+        self._delete_session_messages(session.id, delete_search_entries=not session.is_review_agent)
         interrupted_messages = session.interruption_models
         self.conn.execute(
             "INSERT OR REPLACE INTO sessions "
@@ -204,19 +204,13 @@ class Store:
         self.conn.commit()
         logger.debug("Indexed session %s with %d messages", session.id, len(session.messages))
 
-    def _delete_session_messages(self, session_id: str) -> None:
+    def _delete_session_messages(
+        self, session_id: str, *, delete_search_entries: bool = True
+    ) -> None:
         """Remove all messages and their FTS and vector index entries for *session_id*."""
-        self.conn.execute(
-            "DELETE FROM messages_fts WHERE rowid IN "
-            "(SELECT id FROM messages WHERE session_id = ?)",
-            (session_id,),
+        session_store.delete_session_messages(
+            self.conn, session_id, delete_search_entries=delete_search_entries
         )
-        self.conn.execute(
-            "DELETE FROM vec_messages WHERE rowid IN "
-            "(SELECT id FROM messages WHERE session_id = ?)",
-            (session_id,),
-        )
-        self.conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
 
     def upsert_embedding(self, message_id: int, embedding: list[float]) -> None:
         """Insert (or replace) the *embedding* for message *message_id* into vec_messages."""
@@ -251,6 +245,11 @@ class Store:
                     "INSERT INTO sessions_fts (rowid, summary) VALUES (?, ?)",
                     (rowid, summary),
                 )
+        self.conn.commit()
+
+    def clear_enrichment(self, session_id: str) -> None:
+        """Clear stale summary, entity, and summary-vector data before re-enrichment."""
+        session_store.clear_enrichment(self.conn, session_id)
         self.conn.commit()
 
     def upsert_session_embedding(self, session_id: str, embedding: list[float]) -> None:
