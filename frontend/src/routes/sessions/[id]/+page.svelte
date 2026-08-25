@@ -136,7 +136,7 @@
 		</div>
 
 		{#if session.title}
-			<h1 class="session-title">{session.title}</h1>
+			<h1 class="session-title" title={session.title}>{session.title}</h1>
 		{/if}
 
 		{#if session.summary}
@@ -258,6 +258,12 @@
 		font-weight: 650;
 		line-height: 1.25;
 		color: var(--text);
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		overflow: hidden;
+		overflow-wrap: anywhere;
 	}
 
 	.session-summary {
