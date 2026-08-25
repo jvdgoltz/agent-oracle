@@ -56,6 +56,17 @@ export interface SessionSummary {
 	started_at: string;
 	summary: string;
 	entities: Entity[];
+	review_sessions: ReviewSessionSummary[];
+}
+
+/** A Codex review session linked to its parent thread. */
+export interface ReviewSessionSummary {
+	id: string;
+	agent: string;
+	cwd: string;
+	started_at: string;
+	summary: string | null;
+	parent_thread_id: string;
 }
 
 /** Full session detail including messages and entities. */
@@ -65,9 +76,11 @@ export interface SessionDetail {
 	agent: string;
 	cwd: string;
 	started_at: string;
+	parent_thread_id: string | null;
 	messages: Message[];
 	entities: Entity[];
 	summary: string;
+	review_sessions: ReviewSessionSummary[];
 }
 
 /** A single search hit across sessions. */
@@ -190,10 +203,15 @@ async function responseError(response: Response): Promise<Error> {
 }
 
 /** Start a new Codex agent thread, or resume an existing Codex thread. */
-export function startAgentSession(message: string, resumeThreadId?: string): Promise<AgentSession> {
+export function startAgentSession(
+	message: string,
+	resumeThreadId?: string,
+	imageDataUrl?: string
+): Promise<AgentSession> {
 	return post('/api/agent/sessions', {
 		message,
-		...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {})
+		...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {}),
+		...(imageDataUrl ? { image_data_url: imageDataUrl } : {})
 	});
 }
 
@@ -208,8 +226,15 @@ export function getArchivedAgentSession(threadId: string): Promise<SessionDetail
 }
 
 /** Send a follow-up message to an idle Codex agent thread. */
-export function sendAgentMessage(threadId: string, message: string): Promise<AgentSession> {
-	return post(`/api/agent/sessions/${encodeURIComponent(threadId)}/messages`, { message });
+export function sendAgentMessage(
+	threadId: string,
+	message: string,
+	imageDataUrl?: string
+): Promise<AgentSession> {
+	return post(`/api/agent/sessions/${encodeURIComponent(threadId)}/messages`, {
+		message,
+		...(imageDataUrl ? { image_data_url: imageDataUrl } : {})
+	});
 }
 
 /** Stop the active Codex agent turn. */
@@ -247,8 +272,14 @@ export function getHealth(): Promise<{ status: string }> {
  * @param limit - Maximum number of sessions to return.
  * @param offset - Number of sessions to skip (for pagination).
  */
-export function getSessions(limit = 50, offset = 0): Promise<SessionList> {
-	return get(`/api/sessions?limit=${limit}&offset=${offset}`);
+export function getSessions(
+	limit = 50,
+	offset = 0,
+	includeReviewAgents = false
+): Promise<SessionList> {
+	const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+	if (includeReviewAgents) params.set('include_review_agents', 'true');
+	return get(`/api/sessions?${params.toString()}`);
 }
 
 /** Fetch OMP-compatible behavior statistics for an optional archive scope. */

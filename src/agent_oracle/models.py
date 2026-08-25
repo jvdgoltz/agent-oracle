@@ -76,6 +76,8 @@ class Session:
     messages: list[Message] = field(default_factory=list)
     interruptions: list[Interruption] = field(default_factory=list)
     title: str | None = None
+    parent_thread_id: str | None = None
+    is_review_agent: bool = False
 
     @property
     def interruption_models(self) -> dict[int, str | None]:

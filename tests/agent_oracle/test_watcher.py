@@ -199,6 +199,42 @@ def test_index_file_routes_to_codex_normalizer(tmp_path: Path) -> None:
     )
 
 
+def test_index_file_stores_review_session_without_embedding_or_enrichment(tmp_path: Path) -> None:
+    """Codex review sessions are retained for linkage but never processed for search."""
+    codex_dir = tmp_path / ".codex" / "sessions"
+    codex_dir.mkdir(parents=True)
+    source = codex_dir / "review.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "review-sess",
+                    "cwd": "/tmp",
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "parent_thread_id": "parent-sess",
+                    "source": {"subagent": {"other": "guardian"}},
+                },
+            }
+        )
+    )
+    watcher, store, embedder, enricher = _make_watcher()
+
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        watcher._index_file(source)
+
+    stored = store.index_session.call_args.args[0]
+    assert stored.is_review_agent
+    assert stored.parent_thread_id == "parent-sess"
+    embedder.embed_batch.assert_not_called()
+    store.get_session.assert_not_called()
+    store.upsert_embedding.assert_not_called()
+    store.set_summary.assert_not_called()
+    store.upsert_session_embedding.assert_not_called()
+    store.upsert_entities.assert_not_called()
+    enricher.enrich.assert_not_called()
+
+
 def test_index_file_routes_to_factory_normalizer(tmp_path: Path) -> None:
     """A .jsonl under the factory dir is parsed with the factory normalizer."""
     factory_dir = tmp_path / ".factory" / "sessions"

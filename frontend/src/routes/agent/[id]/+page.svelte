@@ -51,6 +51,12 @@
 	let clearing = $state(false);
 	let submitting = $state(false);
 	let error = $state<string | null>(null);
+	let imageDataUrl = $state<string | undefined>();
+	let imageName = $state('');
+	let imageError = $state<string | null>(null);
+	let imageReading = $state(false);
+	let imageInput = $state<HTMLInputElement | null>(null);
+	let imageSelection = 0;
 	let source: EventSource | null = null;
 	let nextEntryId = 0;
 	let activeAssistantId: number | null = null;
@@ -217,8 +223,9 @@
 		submitting = true;
 		error = null;
 		try {
-			await sendAgentMessage(threadId, text);
+			await sendAgentMessage(threadId, text, imageDataUrl);
 			message = '';
+			clearImage();
 			activeAssistantId = null;
 			receivedAssistant = false;
 			running = true;
@@ -228,6 +235,55 @@
 		} finally {
 			submitting = false;
 		}
+	}
+
+	/** Read one supported image into a Codex-compatible data URL. */
+	function selectImage(event: Event): void {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		const selection = ++imageSelection;
+		imageDataUrl = undefined;
+		imageName = '';
+		imageError = null;
+		imageReading = Boolean(file);
+		if (!file) return;
+		if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
+			imageError = 'Choose a PNG, JPEG, WebP, or GIF image.';
+			imageReading = false;
+			input.value = '';
+			return;
+		}
+		if (file.size > 10 * 1024 * 1024) {
+			imageError = 'Images must be 10 MB or smaller.';
+			imageReading = false;
+			input.value = '';
+			return;
+		}
+		const reader = new FileReader();
+		reader.onload = () => {
+			if (selection !== imageSelection) return;
+			imageReading = false;
+			if (typeof reader.result === 'string') {
+				imageDataUrl = reader.result;
+				imageName = file.name;
+			}
+		};
+		reader.onerror = () => {
+			if (selection !== imageSelection) return;
+			imageReading = false;
+			imageError = 'Could not read that image.';
+		};
+		reader.readAsDataURL(file);
+	}
+
+	/** Clear the selected image before sending the next turn. */
+	function clearImage(): void {
+		imageSelection += 1;
+		imageDataUrl = undefined;
+		imageName = '';
+		imageError = null;
+		imageReading = false;
+		if (imageInput) imageInput.value = '';
 	}
 
 	/** Interrupt the active turn and keep the completed transcript visible. */
@@ -406,13 +462,35 @@
 			sendMessage();
 		}}
 	>
+		<div class="image-input">
+			<label for="agent-image">Attach image</label>
+			<input
+				bind:this={imageInput}
+				id="agent-image"
+				type="file"
+				accept="image/png,image/jpeg,image/webp,image/gif"
+				onchange={selectImage}
+				disabled={running || submitting}
+			/>
+			{#if imageName}
+				<button
+					type="button"
+					class="clear-image"
+					onclick={clearImage}
+					disabled={running || submitting}
+				>
+					Remove {imageName}
+				</button>
+			{/if}
+		</div>
+		{#if imageError}<p class="error">{imageError}</p>{/if}
 		<textarea
 			placeholder={running ? 'Codex is working…' : 'Ask a follow-up question…'}
 			bind:value={message}
 			disabled={running || submitting}
 			rows="2"
 		></textarea>
-		<button type="submit" disabled={running || submitting || !message.trim()}
+		<button type="submit" disabled={running || submitting || imageReading || !message.trim()}
 			>{submitting ? 'Sending…' : 'Send'}</button
 		>
 	</form>

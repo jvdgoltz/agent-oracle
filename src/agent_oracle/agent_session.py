@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from openai_codex import ApprovalMode, Codex, CodexConfig, Sandbox
+from openai_codex import ApprovalMode, Codex, CodexConfig, ImageInput, Sandbox, TextInput
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class AgentSessionManager:
         self,
         codex_factory: Callable[[], Any] | None = None,
         *,
-        mcp_url: str = "http://127.0.0.1:8731/agent-mcp",
+        mcp_url: str = "http://127.0.0.1:8731/mcp/",
     ) -> None:
         """Initialize a manager with an optional Codex factory for tests."""
         self._codex_factory = codex_factory or _create_codex
@@ -62,7 +62,13 @@ class AgentSessionManager:
         self._active: AgentSessionState | None = None
         self._lock = threading.RLock()
 
-    def start(self, message: str, *, resume_thread_id: str | None = None) -> AgentSessionState:
+    def start(
+        self,
+        message: str,
+        *,
+        resume_thread_id: str | None = None,
+        image_data_url: str | None = None,
+    ) -> AgentSessionState:
         """Start a new or resumed thread and stream its first user turn."""
         if not message.strip():
             raise ValueError("message must not be empty")
@@ -82,7 +88,7 @@ class AgentSessionManager:
             state.events.put({"type": "auth", "data": {"mode": auth_mode}})
             state.events.put({"type": "user", "data": {"text": message}})
             try:
-                self._start_turn(state, message, state.generation, state.events)
+                self._start_turn(state, message, state.generation, state.events, image_data_url)
             except Exception:
                 if self._active is state:
                     self._active = None
@@ -90,7 +96,9 @@ class AgentSessionManager:
                 raise
         return state
 
-    def send_message(self, thread_id: str, message: str) -> AgentSessionState:
+    def send_message(
+        self, thread_id: str, message: str, *, image_data_url: str | None = None
+    ) -> AgentSessionState:
         """Run a follow-up message on an idle, existing Codex thread."""
         if not message.strip():
             raise ValueError("message must not be empty")
@@ -107,7 +115,7 @@ class AgentSessionManager:
             generation = state.generation
             turn_queue = state.events
             state.events.put({"type": "user", "data": {"text": message}})
-            self._start_turn(state, message, generation, turn_queue)
+            self._start_turn(state, message, generation, turn_queue, image_data_url)
         return state
 
     def has_thread(self, thread_id: str) -> bool:
@@ -115,11 +123,13 @@ class AgentSessionManager:
         with self._lock:
             return self._active is not None and self._active.thread_id == thread_id
 
-    def resume_message(self, thread_id: str, message: str) -> AgentSessionState:
+    def resume_message(
+        self, thread_id: str, message: str, *, image_data_url: str | None = None
+    ) -> AgentSessionState:
         """Resume an archived thread only when its first follow-up is sent."""
         if self.has_thread(thread_id):
-            return self.send_message(thread_id, message)
-        return self.start(message, resume_thread_id=thread_id)
+            return self.send_message(thread_id, message, image_data_url=image_data_url)
+        return self.start(message, resume_thread_id=thread_id, image_data_url=image_data_url)
 
     def events(self, thread_id: str) -> Iterator[dict[str, Any]]:
         """Yield every queued event for the active thread until it ends."""
@@ -194,12 +204,13 @@ class AgentSessionManager:
         message: str,
         generation: int,
         turn_queue: queue.Queue[dict[str, Any] | object],
+        image_data_url: str | None = None,
     ) -> None:
         """Create the TurnHandle before exposing the session to control endpoints."""
         try:
             assert state.thread is not None
             state.turn = state.thread.turn(
-                message,
+                _turn_input(message, image_data_url),
                 approval_mode=ApprovalMode.auto_review,
                 cwd=_REPO_ROOT,
                 effort=_REASONING_EFFORT,
@@ -260,6 +271,13 @@ class AgentSessionManager:
         """Close the SDK client associated with a retired conversation."""
         if state.codex is not None:
             state.codex.close()
+
+
+def _turn_input(message: str, image_data_url: str | None) -> str | list[TextInput | ImageInput]:
+    """Build Codex turn input with optional browser-supplied image data."""
+    if image_data_url is None:
+        return message
+    return [TextInput(text=message), ImageInput(url=image_data_url)]
 
 
 def _create_codex() -> Codex:

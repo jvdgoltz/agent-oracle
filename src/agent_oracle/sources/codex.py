@@ -52,6 +52,8 @@ def parse_codex_session(path: Path) -> Session:
     messages: list[Message] = []
     interruptions: list[Interruption] = []
     current_model: str | None = None
+    parent_thread_id: str | None = None
+    is_review_agent = False
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -65,6 +67,13 @@ def parse_codex_session(path: Path) -> Session:
             session_id = payload.get("id", session_id)
             cwd = payload.get("cwd", "")
             started_at = parse_timestamp(payload.get("timestamp", "")) or started_at
+            parent_thread_id = payload.get("parent_thread_id")
+            source = payload.get("source")
+            is_review_agent = (
+                isinstance(source, dict)
+                and isinstance(source.get("subagent"), dict)
+                and source["subagent"].get("other") == "guardian"
+            )
         elif record_type == "turn_context":
             current_model = payload.get("model", current_model)
         elif (
@@ -97,6 +106,8 @@ def parse_codex_session(path: Path) -> Session:
         started_at=started_at,
         messages=messages,
         interruptions=interruptions,
+        parent_thread_id=parent_thread_id,
+        is_review_agent=is_review_agent,
     )
 
 

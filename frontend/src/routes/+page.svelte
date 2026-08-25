@@ -348,6 +348,14 @@
 							</div>
 						{/if}
 					</a>
+					{#if session.review_sessions.length > 0}
+						<div class="review-sessions">
+							<span class="muted">Reviews</span>
+							{#each session.review_sessions as review (review.id)}
+								<a href={resolve(`/sessions/${review.id}`)}>{relativeTime(review.started_at)}</a>
+							{/each}
+						</div>
+					{/if}
 				</li>
 			{/each}
 		</ul>

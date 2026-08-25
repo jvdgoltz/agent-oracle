@@ -53,6 +53,8 @@ def test_parse_basic_session(tmp_path: Path) -> None:
     assert session.id == "sess-001"
     assert session.agent is AgentType.CODEX
     assert session.cwd == "/tmp/project"
+    assert not session.is_review_agent
+    assert session.parent_thread_id is None
     assert len(session.messages) == 2
     assert session.messages[0].role is MessageRole.USER
     assert session.messages[0].content == "Hello world"
@@ -81,6 +83,30 @@ def test_parse_uses_latest_codex_thread_name(tmp_path: Path) -> None:
     )
 
     assert parse_codex_session(path).title == "Current title"
+
+
+def test_parse_preserves_review_parent_metadata(tmp_path: Path) -> None:
+    """Codex guardian sessions retain their review marker and parent thread ID."""
+    session = parse_codex_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "review-1",
+                        "cwd": "/work",
+                        "timestamp": "2026-08-01T00:00:00Z",
+                        "parent_thread_id": "parent-1",
+                        "source": {"subagent": {"other": "guardian"}},
+                    },
+                }
+            ],
+        )
+    )
+
+    assert session.is_review_agent
+    assert session.parent_thread_id == "parent-1"
 
 
 def test_parse_skips_non_message_records(tmp_path: Path) -> None:

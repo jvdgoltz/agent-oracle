@@ -122,6 +122,9 @@ class SessionWatcher:
                 logger.debug("Skipping already-enriched session %s", session.id)
                 return
             self.store.index_session(session)
+            if session.is_review_agent:
+                logger.info("Stored unindexed Codex review session %s", session.id)
+                return
             self._embed_messages(session)
             self._enrich_session(session)
             logger.info("Indexed session %s (%s)", session.id, session.agent.value)

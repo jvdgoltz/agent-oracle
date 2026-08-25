@@ -7,6 +7,7 @@ import threading
 from unittest.mock import MagicMock
 
 import pytest
+from openai_codex import ImageInput, TextInput
 
 from agent_oracle.agent_session import (
     _REPO_ROOT,
@@ -65,6 +66,23 @@ def test_start_streams_user_and_sdk_events() -> None:
     assert state.thread_id == "thread-1"
     assert [event["type"] for event in events] == ["auth", "user", "assistant", "completed"]
     assert events[2]["data"] == {"delta": "Hi"}
+
+
+def test_start_passes_image_data_url_to_codex() -> None:
+    """An image data URL becomes a typed Codex image input alongside the prompt."""
+    thread = MagicMock(id="thread-1")
+    thread.turn.return_value = MagicMock()
+    codex = MagicMock()
+    codex.thread_start.return_value = thread
+    manager = AgentSessionManager(codex_factory=lambda: codex)
+
+    manager.start("Inspect this", image_data_url="data:image/png;base64,AAAA")
+
+    turn_input = thread.turn.call_args.args[0]
+    assert isinstance(turn_input[0], TextInput)
+    assert turn_input[0].text == "Inspect this"
+    assert isinstance(turn_input[1], ImageInput)
+    assert turn_input[1].url == "data:image/png;base64,AAAA"
 
 
 def test_start_rejects_a_second_active_session() -> None:
@@ -260,6 +278,23 @@ def test_start_configures_codex_for_the_repository() -> None:
     assert "untrusted" in options["base_instructions"]
     turn_options = thread.turn.call_args.kwargs
     assert turn_options["effort"] == "medium"
+
+
+def test_default_codex_configuration_uses_mounted_agent_oracle_mcp() -> None:
+    """New threads default to the MCP route mounted by the FastAPI app."""
+    thread = MagicMock(id="thread-1")
+    turn = MagicMock(id="turn-1")
+    turn.stream.return_value = _Stream()
+    thread.turn.return_value = turn
+    codex = MagicMock()
+    codex.thread_start.return_value = thread
+    manager = AgentSessionManager(codex_factory=lambda: codex)
+
+    state = manager.start("Investigate")
+    list(manager.events(state.thread_id))
+
+    options = codex.thread_start.call_args.kwargs
+    assert options["config"]["mcp_servers"]["agent-oracle"]["url"] == ("http://127.0.0.1:8731/mcp/")
 
 
 def test_new_session_closes_an_idle_client() -> None:

@@ -146,3 +146,30 @@ def test_backfill_marks_sessions_enriched(store: Store) -> None:
 def test_backfill_returns_zero_when_nothing_missing(store: Store) -> None:
     """Backfill is a no-op when every summary is already indexed."""
     assert store.backfill_summary_indexes(lambda texts: []) == 0
+
+
+def test_backfill_never_indexes_or_embeds_review_summaries(store: Store) -> None:
+    """Review summaries remain absent from both summary indexes during backfill."""
+    _legacy_session(store, "regular", "regular summary")
+    _legacy_session(store, "review", "review summary")
+    store.conn.execute("UPDATE sessions SET is_review_agent = 1 WHERE id = 'review'")
+    store.conn.commit()
+
+    embedded: list[list[str]] = []
+    count = store.backfill_summary_indexes(
+        lambda texts: embedded.append(texts) or [_make_embedding(1.0) for _ in texts]
+    )
+
+    assert count == 2
+    assert embedded == [["regular summary"]]
+    review_rowid = store.conn.execute("SELECT rowid FROM sessions WHERE id = 'review'").fetchone()[
+        0
+    ]
+    assert (
+        store.conn.execute("SELECT 1 FROM sessions_fts WHERE rowid = ?", (review_rowid,)).fetchone()
+        is None
+    )
+    assert (
+        store.conn.execute("SELECT 1 FROM vec_sessions WHERE rowid = ?", (review_rowid,)).fetchone()
+        is None
+    )

@@ -42,6 +42,10 @@ SEARCH_RESULTS = [
 class _FakeStore:
     """A minimal stand-in for :class:`agent_oracle.store.Store`."""
 
+    def __init__(self) -> None:
+        """Record recent-session arguments for the visibility assertion."""
+        self.recent_args: tuple[int, int, bool] | None = None
+
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """Return a fake text search result for *query*."""
         return [{"session_id": "s1", "snippet": "text match", "rank": -1.0}]
@@ -60,8 +64,11 @@ class _FakeStore:
         """Return the fake session when it is known, else None."""
         return SESSION if session_id == "s1" else None
 
-    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
+    def list_sessions(
+        self, limit: int = 50, offset: int = 0, *, include_review_agents: bool = False
+    ) -> list[dict]:
         """Return a fake recent-sessions listing."""
+        self.recent_args = (limit, offset, include_review_agents)
         keys = ("id", "agent", "cwd", "title", "started_at", "summary", "enriched")
         return [{k: SESSION[k] for k in keys}]
 
@@ -189,3 +196,13 @@ def test_list_recent_sessions_returns_recent_sessions() -> None:
 
     assert result[0]["id"] == "s1"
     assert result[0]["agent"] == "codex"
+
+
+def test_list_recent_sessions_excludes_review_agents() -> None:
+    """The MCP overview always requests the default review-hidden listing."""
+    store = _FakeStore()
+    server = create_mcp_server(cast(Store, store), cast(Embedder, _FakeEmbedder()))
+
+    _call(server, "list_recent_sessions", {"limit": 10, "offset": 3})
+
+    assert store.recent_args == (10, 3, False)

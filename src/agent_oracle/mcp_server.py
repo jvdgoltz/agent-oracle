@@ -52,7 +52,7 @@ def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:
     @mcp.tool
     def list_recent_sessions(limit: int = 20, offset: int = 0) -> list[dict]:
         """Return recent sessions ordered by start time, with pagination."""
-        return store.list_sessions(limit=limit, offset=offset)
+        return store.list_sessions(limit=limit, offset=offset, include_review_agents=False)
 
     return mcp
 

@@ -11,15 +11,17 @@ from typing import Any
 
 import sqlite_vec
 
+from agent_oracle import session_store
 from agent_oracle.behavior_store import list_behavior_messages as query_behavior_messages
 from agent_oracle.models import Session
 from agent_oracle.overview_store import list_overview_rows as query_overview_rows
 
 logger = logging.getLogger(__name__)
 
-
 _EMBED_DIM = 384
 _RRF_K = 60
+_REVIEW_SCHEMA_COLUMNS = {"is_review_agent", "parent_thread_id"}
+_REVIEW_MIGRATION_COMMAND = "uv run python scripts/backfill_codex_review_sessions.py --write"
 
 
 def _merge_by_score(
@@ -61,7 +63,11 @@ class Store:
         """Open (or create) the database at *db_path* and initialize its schema."""
         self.db_path = db_path
         self.conn = self._connect()
-        self._init_schema()
+        try:
+            self._init_schema()
+        except Exception:
+            self.conn.close()
+            raise
         logger.info("Store initialized at %s", db_path)
 
     def _connect(self) -> sqlite3.Connection:
@@ -84,7 +90,9 @@ class Store:
                 title     TEXT,
                 started_at TEXT,
                 summary   TEXT,
-                enriched  INTEGER DEFAULT 0
+                enriched  INTEGER DEFAULT 0,
+                parent_thread_id TEXT,
+                is_review_agent INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -130,6 +138,20 @@ class Store:
             f"USING vec0(embedding float[{_EMBED_DIM}])"
         )
         self.conn.commit()
+        self._require_review_session_schema()
+
+    def _require_review_session_schema(self) -> None:
+        """Require an explicit migration before using a pre-review-session database."""
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sessions)")}
+        missing = _REVIEW_SCHEMA_COLUMNS - columns
+        if missing:
+            names = ", ".join(sorted(missing))
+            raise RuntimeError(
+                "Database requires the Codex review-session migration "
+                f"(missing {names}). Preview it with "
+                "uv run python scripts/backfill_codex_review_sessions.py, then run "
+                f"{_REVIEW_MIGRATION_COMMAND} after confirmation."
+            )
 
     def index_session(self, session: Session) -> None:
         """Insert or replace *session* and its messages (regular table + FTS5)."""
@@ -137,10 +159,10 @@ class Store:
         interrupted_messages = session.interruption_models
         self.conn.execute(
             "INSERT OR REPLACE INTO sessions "
-            "(id, agent, cwd, title, started_at, summary, enriched) "
-            "VALUES (?, ?, ?, ?, ?, "
+            "(id, agent, cwd, title, started_at, summary, enriched, parent_thread_id, "
+            "is_review_agent) VALUES (?, ?, ?, ?, ?, "
             "(SELECT summary FROM sessions WHERE id = ?), "
-            "COALESCE((SELECT enriched FROM sessions WHERE id = ?), 0))",
+            "COALESCE((SELECT enriched FROM sessions WHERE id = ?), 0), ?, ?)",
             (
                 session.id,
                 session.agent.value,
@@ -149,6 +171,8 @@ class Store:
                 session.started_at.isoformat(),
                 session.id,
                 session.id,
+                session.parent_thread_id,
+                session.is_review_agent,
             ),
         )
         for seq, msg in enumerate(session.messages):
@@ -172,7 +196,7 @@ class Store:
                     interrupted_messages.get(seq),
                 ),
             )
-            if msg.is_searchable:
+            if msg.is_searchable and not session.is_review_agent:
                 self.conn.execute(
                     "INSERT INTO messages_fts (rowid, content) VALUES (?, ?)",
                     (cursor.lastrowid, msg.content),
@@ -220,7 +244,7 @@ class Store:
             (summary, session_id),
         )
         rowid = self._session_rowid(session_id)
-        if rowid is not None:
+        if rowid is not None and not self._is_review_agent(session_id):
             self.conn.execute("DELETE FROM sessions_fts WHERE rowid = ?", (rowid,))
             if summary:
                 self.conn.execute(
@@ -231,6 +255,8 @@ class Store:
 
     def upsert_session_embedding(self, session_id: str, embedding: list[float]) -> None:
         """Insert (or replace) the *embedding* of the session summary into vec_sessions."""
+        if self._is_review_agent(session_id):
+            return
         rowid = self._session_rowid(session_id)
         if rowid is None:
             logger.warning("No session %s found; skipping summary embedding", session_id)
@@ -246,6 +272,13 @@ class Store:
         """Return the SQLite rowid of *session_id*, or None if it does not exist."""
         row = self.conn.execute("SELECT rowid FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return int(row[0]) if row else None
+
+    def _is_review_agent(self, session_id: str) -> bool:
+        """Return whether *session_id* belongs to a Codex review agent."""
+        row = self.conn.execute(
+            "SELECT is_review_agent FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return row is not None and bool(row["is_review_agent"])
 
     def backfill_summary_indexes(
         self, embed_batch: Callable[[list[str]], list[list[float]]]
@@ -263,6 +296,7 @@ class Store:
                    EXISTS(SELECT 1 FROM vec_sessions v WHERE v.rowid = s.rowid) AS has_vec
             FROM sessions s
             WHERE s.summary IS NOT NULL AND s.summary != ''
+              AND NOT s.is_review_agent
             """
         ).fetchall()
         need_fts = [r for r in rows if not r["has_fts"]]
@@ -282,7 +316,8 @@ class Store:
                     (r["rowid"], sqlite_vec.serialize_float32(embedding)),
                 )
         self.conn.execute(
-            "UPDATE sessions SET enriched = 1 WHERE summary IS NOT NULL AND summary != ''"
+            "UPDATE sessions SET enriched = 1 WHERE summary IS NOT NULL AND summary != '' "
+            "AND NOT is_review_agent"
         )
         self.conn.commit()
         logger.info("Backfilled summary indexes: %d FTS, %d vectors", len(need_fts), len(need_vec))
@@ -307,7 +342,7 @@ class Store:
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.rowid
             JOIN sessions s ON s.id = m.session_id
-            WHERE messages_fts MATCH ?
+            WHERE messages_fts MATCH ? AND NOT s.is_review_agent
             ORDER BY rank
             LIMIT ?
             """,
@@ -326,7 +361,7 @@ class Store:
                    bm25(sessions_fts)                AS rank
             FROM sessions_fts
             JOIN sessions s ON s.rowid = sessions_fts.rowid
-            WHERE sessions_fts MATCH ?
+            WHERE sessions_fts MATCH ? AND NOT s.is_review_agent
             ORDER BY rank
             LIMIT ?
             """,
@@ -351,6 +386,7 @@ class Store:
             JOIN messages m ON m.id = v.rowid
             JOIN sessions s ON s.id = m.session_id
             WHERE v.embedding MATCH ? AND k = ?
+              AND NOT s.is_review_agent
             ORDER BY v.distance
             """,
             (blob, limit),
@@ -368,6 +404,7 @@ class Store:
             FROM vec_sessions v
             JOIN sessions s ON s.rowid = v.rowid
             WHERE v.embedding MATCH ? AND k = ?
+              AND NOT s.is_review_agent
             ORDER BY v.distance
             """,
             (blob, limit),
@@ -415,18 +452,17 @@ class Store:
             for key, score in ranked
         ]
 
-    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
+    def list_sessions(
+        self, limit: int = 50, offset: int = 0, *, include_review_agents: bool = False
+    ) -> list[dict]:
         """Return sessions ordered by started_at descending with pagination."""
-        rows = self.conn.execute(
-            """
-            SELECT id, agent, cwd, title, started_at, summary, enriched
-            FROM sessions
-            ORDER BY started_at DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return session_store.list_sessions(
+            self.conn, limit, offset, include_review_agents=include_review_agents
+        )
+
+    def list_review_sessions(self, parent_thread_ids: list[str]) -> dict[str, list[dict]]:
+        """Return review summaries grouped by their parent Codex thread ID."""
+        return session_store.list_review_sessions(self.conn, parent_thread_ids)
 
     def list_behavior_messages(
         self,
@@ -453,44 +489,12 @@ class Store:
 
     def get_session(self, session_id: str) -> dict | None:
         """Return the session and all its messages, or None if not found."""
-        row = self.conn.execute(
-            "SELECT id, agent, cwd, title, started_at, summary, enriched "
-            "FROM sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        result = dict(row)
-        msg_rows = self.conn.execute(
-            "SELECT id, session_id, role, content, timestamp, seq, "
-            "is_thinking, model, is_system_instruction, is_injected "
-            "FROM messages WHERE session_id = ? ORDER BY seq",
-            (session_id,),
-        ).fetchall()
-        result["messages"] = [dict(r) for r in msg_rows]
-        return result
+        return session_store.get_session(self.conn, session_id)
 
     def get_entities(self, session_id: str) -> list[dict]:
         """Return all entities for *session_id*."""
-        rows = self.conn.execute(
-            "SELECT entity_type, entity_value FROM entities WHERE session_id = ?",
-            (session_id,),
-        ).fetchall()
-        return [{"entity_type": r["entity_type"], "entity_value": r["entity_value"]} for r in rows]
+        return session_store.get_entities(self.conn, session_id)
 
     def list_entities(self, session_ids: list[str]) -> dict[str, list[dict]]:
         """Return entities keyed by session_id for all given *session_ids* in one query."""
-        if not session_ids:
-            return {}
-        placeholders = ",".join("?" for _ in session_ids)
-        rows = self.conn.execute(
-            "SELECT session_id, entity_type, entity_value FROM entities "
-            f"WHERE session_id IN ({placeholders})",
-            session_ids,
-        ).fetchall()
-        grouped: dict[str, list[dict]] = {}
-        for r in rows:
-            grouped.setdefault(r["session_id"], []).append(
-                {"entity_type": r["entity_type"], "entity_value": r["entity_value"]}
-            )
-        return grouped
+        return session_store.list_entities(self.conn, session_ids)

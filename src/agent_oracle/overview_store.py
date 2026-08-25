@@ -14,7 +14,7 @@ def list_overview_rows(
     end: date | None = None,
 ) -> dict[str, list[dict]]:
     """Return scoped sessions and visible-message rows for overview statistics."""
-    clauses = ["1 = 1"]
+    clauses = ["NOT s.is_review_agent"]
     params: list[str] = []
     if agent is not None:
         clauses.append("s.agent = ?")

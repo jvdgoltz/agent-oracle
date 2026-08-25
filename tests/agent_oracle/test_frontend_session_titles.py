@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 FRONTEND = Path(__file__).parents[2] / "frontend" / "src"
 
 

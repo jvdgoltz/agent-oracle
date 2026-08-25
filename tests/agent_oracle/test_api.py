@@ -89,6 +89,7 @@ def test_list_sessions_returns_paginated_results() -> None:
     store.list_entities.return_value = {
         "s2": [{"entity_type": "product", "entity_value": "SQLite"}]
     }
+    store.list_review_sessions.return_value = {}
     client, store, _embedder = _client(store=store)
     resp = client.get("/api/sessions?limit=10&offset=5")
     assert resp.status_code == 200
@@ -96,7 +97,7 @@ def test_list_sessions_returns_paginated_results() -> None:
     assert body["sessions"][0]["entities"] == [{"type": "product", "value": "SQLite"}]
     assert body["sessions"][1]["entities"] == []
     assert body["total"] == 2
-    store.list_sessions.assert_called_once_with(limit=10, offset=5)
+    store.list_sessions.assert_called_once_with(limit=10, offset=5, include_review_agents=False)
 
     for key in ("agent", "cwd", "title", "summary"):
         assert body["sessions"][0][key] == sessions[0][key]
@@ -124,6 +125,7 @@ def test_get_session_returns_detail() -> None:
         ],
     }
     store.get_session.return_value = session
+    store.list_review_sessions.return_value = {}
     client, store, _embedder = _client(store=store)
     resp = client.get("/api/sessions/s1")
     assert resp.status_code == 200

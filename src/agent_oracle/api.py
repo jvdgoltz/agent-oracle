@@ -18,6 +18,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from agent_oracle.agent_payload import source_messages as _source_messages
+from agent_oracle.agent_payload import validated_image_data_url as _validated_image_data_url
 from agent_oracle.agent_session import AgentSessionError, AgentSessionManager, encode_sse
 from agent_oracle.behavior import summarize_messages
 from agent_oracle.embed import Embedder
@@ -75,21 +77,30 @@ def _register_routes(app: FastAPI) -> None:
         request: Request,
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
+        include_review_agents: bool = Query(default=False),
     ) -> dict[str, Any]:
         """Return the most recent sessions with pagination metadata."""
         store = request.app.state.store
-        sessions = store.list_sessions(limit=limit, offset=offset)
+        sessions = store.list_sessions(
+            limit=limit,
+            offset=offset,
+            include_review_agents=include_review_agents,
+        )
         entities = store.list_entities([s["id"] for s in sessions])
+        reviews = store.list_review_sessions([s["id"] for s in sessions])
         for session in sessions:
             session["entities"] = _normalize_entities(entities.get(session["id"], []))
+            session["review_sessions"] = reviews.get(session["id"], [])
         return {"sessions": sessions, "total": len(sessions)}
 
     @app.get("/api/sessions/{session_id}")
     def get_session(request: Request, session_id: str) -> dict[str, Any]:
         """Return a single session with its messages, or 404 if unknown."""
-        session = request.app.state.store.get_session(session_id)
+        store = request.app.state.store
+        session = store.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
+        session["review_sessions"] = store.list_review_sessions([session_id]).get(session_id, [])
         return session
 
     @app.get("/api/search")
@@ -218,9 +229,17 @@ def _register_agent_start_route(app: FastAPI) -> None:
         if resume_thread_id is not None:
             _validate_resume_session(request.app.state.store, resume_thread_id)
         try:
-            state = request.app.state.agent_manager.start(
-                body.get("message", ""), resume_thread_id=resume_thread_id
-            )
+            image_data_url = _validated_image_data_url(body)
+            if image_data_url is None:
+                state = request.app.state.agent_manager.start(
+                    body.get("message", ""), resume_thread_id=resume_thread_id
+                )
+            else:
+                state = request.app.state.agent_manager.start(
+                    body.get("message", ""),
+                    resume_thread_id=resume_thread_id,
+                    image_data_url=image_data_url,
+                )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except AgentSessionError as exc:
@@ -261,11 +280,14 @@ def _register_agent_control_routes(app: FastAPI) -> None:
         """Send a follow-up message on an idle, existing Codex thread."""
         try:
             manager = request.app.state.agent_manager
-            if manager.has_thread(thread_id):
-                state = manager.send_message(thread_id, body.get("message", ""))
-            else:
-                _validate_resume_session(request.app.state.store, thread_id)
-                state = manager.resume_message(thread_id, body.get("message", ""))
+            image_data_url = _validated_image_data_url(body)
+            state = _send_agent_message(
+                manager,
+                request.app.state.store,
+                thread_id,
+                body.get("message", ""),
+                image_data_url,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except AgentSessionError as exc:
@@ -321,6 +343,24 @@ async def _sse_events(
             yield encode_sse(event)
 
 
+def _send_agent_message(
+    manager: AgentSessionManager,
+    store: Store,
+    thread_id: str,
+    message: str,
+    image_data_url: str | None,
+) -> Any:
+    """Send a text or image turn to the live thread, resuming it when needed."""
+    if manager.has_thread(thread_id):
+        if image_data_url is None:
+            return manager.send_message(thread_id, message)
+        return manager.send_message(thread_id, message, image_data_url=image_data_url)
+    _validate_resume_session(store, thread_id)
+    if image_data_url is None:
+        return manager.resume_message(thread_id, message)
+    return manager.resume_message(thread_id, message, image_data_url=image_data_url)
+
+
 def _agent_repo_root() -> str:
     """Return the repository root used by the embedded Codex session."""
     from agent_oracle.agent_session import _REPO_ROOT
@@ -333,7 +373,11 @@ def _validate_resume_session(store: Store, thread_id: str) -> None:
     session = store.get_session(thread_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Resumable Codex session not found")
-    if session.get("agent") != "codex" or session.get("cwd") != _agent_repo_root():
+    if (
+        session.get("agent") != "codex"
+        or session.get("cwd") != _agent_repo_root()
+        or session.get("is_review_agent", False)
+    ):
         raise HTTPException(status_code=422, detail="Session cannot be resumed in this repository")
 
 
@@ -351,25 +395,6 @@ def _resumable_sessions(store: Store) -> list[dict[str, Any]]:
         if len(page) < 200:
             return candidates
         offset += len(page)
-
-
-def _source_messages(messages: list[Any], session_id: str) -> list[dict[str, Any]]:
-    """Convert locally parsed messages into the session-detail API shape."""
-    return [
-        {
-            "id": sequence,
-            "session_id": session_id,
-            "role": str(message.role),
-            "content": message.content,
-            "timestamp": message.timestamp.isoformat(),
-            "seq": sequence,
-            "is_thinking": int(message.is_thinking),
-            "model": message.model,
-            "is_system_instruction": int(message.is_system_instruction),
-            "is_injected": int(message.is_injected),
-        }
-        for sequence, message in enumerate(messages)
-    ]
 
 
 def _run_search(

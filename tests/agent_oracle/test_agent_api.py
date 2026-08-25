@@ -81,6 +81,48 @@ def test_agent_empty_message_is_unprocessable() -> None:
     assert response.status_code == 422
 
 
+def test_agent_rejects_invalid_image_data_url() -> None:
+    """Agent turns reject unsupported image payloads before invoking Codex."""
+    manager = MagicMock()
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Inspect", "image_data_url": "data:text/plain;base64,AAAA"},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
+def test_agent_rejects_malformed_image_data_url() -> None:
+    """Agent turns reject malformed Base64 before invoking Codex."""
+    manager = MagicMock()
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Inspect", "image_data_url": "data:image/png;base64,===="},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
+def test_agent_rejects_image_data_url_with_mismatched_content() -> None:
+    """Agent turns reject valid Base64 bytes declared as the wrong image type."""
+    manager = MagicMock()
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Inspect", "image_data_url": "data:image/png;base64,R0lGODlh"},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
 def test_agent_resume_requires_a_matching_archived_codex_session() -> None:
     """Resume IDs are validated before the manager can invoke Codex."""
     store = MagicMock()
@@ -108,6 +150,26 @@ def test_agent_resume_rejects_unknown_session() -> None:
     )
 
     assert response.status_code == 404
+    manager.start.assert_not_called()
+
+
+def test_agent_resume_rejects_review_sessions() -> None:
+    """Guardian review sessions remain read-only archive children."""
+    store = MagicMock()
+    store.get_session.return_value = {
+        "agent": "codex",
+        "cwd": "/Users/jvdgoltz/Projects/agent-oracle",
+        "is_review_agent": True,
+    }
+    manager = MagicMock()
+    app = create_app(store, MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Resume", "resume_thread_id": "review-thread"},
+    )
+
+    assert response.status_code == 422
     manager.start.assert_not_called()
 
 

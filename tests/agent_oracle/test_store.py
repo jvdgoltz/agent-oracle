@@ -6,7 +6,9 @@ summaries, and text / vector / hybrid search.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +31,8 @@ def _make_session(
     messages: list[Message] | None = None,
     started_at: datetime | None = None,
     title: str | None = "Fix session titles",
+    parent_thread_id: str | None = None,
+    is_review_agent: bool = False,
 ) -> Session:
     """Build a minimal :class:`Session` for testing."""
     ts = started_at or datetime(2026, 1, 1, tzinfo=UTC)
@@ -39,6 +43,8 @@ def _make_session(
         started_at=ts,
         title=title,
         messages=messages or [],
+        parent_thread_id=parent_thread_id,
+        is_review_agent=is_review_agent,
     )
 
 
@@ -84,6 +90,20 @@ def test_init_creates_indexes(store: Store) -> None:
     assert "idx_entities_session_id" in names
 
 
+def test_init_requires_explicit_review_session_migration(tmp_path: Path) -> None:
+    """An older database fails at startup with the required migration command."""
+    database = tmp_path / "legacy.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
+
+    with pytest.raises(RuntimeError, match=r"backfill_codex_review_sessions\.py --write"):
+        Store(database)
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(sessions)")}
+    assert columns == {"id"}
+
+
+# --------------------------------------------------------------------------- #
 # index_session
 
 
@@ -473,9 +493,6 @@ def test_get_session_returns_session_with_messages(store: Store) -> None:
 def test_get_session_returns_none_for_missing(store: Store) -> None:
     """get_session returns None for a non-existent session."""
     assert store.get_session("does-not-exist") is None
-
-
-# get_entities
 
 
 def test_get_entities_returns_empty_for_missing(store: Store) -> None:

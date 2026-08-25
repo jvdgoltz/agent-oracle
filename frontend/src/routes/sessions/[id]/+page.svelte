@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import AgentBadge from '$lib/AgentBadge.svelte';
 	import { getSession, type Message, type SessionDetail } from '$lib/api';
@@ -6,8 +7,8 @@
 	import { renderMarkdown } from '$lib/markdown';
 	import { SvelteSet } from 'svelte/reactivity';
 
-	/** The `id` route parameter for this session. */
-	const id: string = page.params.id ?? '';
+	/** The current `id` route parameter for this session. */
+	const id = $derived(page.params.id ?? '');
 
 	let session: SessionDetail | null = $state(null);
 	let loading = $state(true);
@@ -54,7 +55,7 @@
 	);
 
 	/**
-	 * Load the full session detail once the id parameter is known.
+	 * Load the full session detail when the id parameter changes.
 	 */
 	async function load() {
 		loading = true;
@@ -134,6 +135,20 @@
 					>
 				{/each}
 			</div>
+		{/if}
+
+		{#if session.parent_thread_id}
+			<nav class="session-links" aria-label="Related session">
+				<a href={resolve(`/sessions/${session.parent_thread_id}`)}>Parent session</a>
+			</nav>
+		{/if}
+
+		{#if session.review_sessions.length > 0}
+			<nav class="session-links" aria-label="Review sessions">
+				{#each session.review_sessions as review, index (review.id)}
+					<a href={resolve(`/sessions/${review.id}`)}>Review session {index + 1}</a>
+				{/each}
+			</nav>
 		{/if}
 
 		<button class="metadata-toggle" onclick={() => (showSessionMeta = !showSessionMeta)}>
@@ -253,6 +268,12 @@
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 		color: var(--subtle);
+	}
+
+	.session-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--s3);
 	}
 
 	/* ── Hidden messages bar ─────────────────────────────────────── */
