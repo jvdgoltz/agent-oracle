@@ -125,6 +125,7 @@ def test_get_session_returns_detail() -> None:
         ],
     }
     store.get_session.return_value = session
+    store.get_entities.return_value = [{"entity_type": "product", "entity_value": "SQLite"}]
     store.list_review_sessions.return_value = {}
     client, store, _embedder = _client(store=store)
     resp = client.get("/api/sessions/s1")
@@ -132,8 +133,10 @@ def test_get_session_returns_detail() -> None:
     body = resp.json()
     assert body["id"] == "s1"
     assert body["agent"] == "codex"
+    assert body["entities"] == [{"type": "product", "value": "SQLite"}]
     assert body["messages"][0]["content"] == "hi"
     store.get_session.assert_called_once_with("s1")
+    store.get_entities.assert_called_once_with("s1")
 
 
 def test_get_session_missing_returns_404() -> None:

@@ -100,6 +100,7 @@ def _register_routes(app: FastAPI) -> None:
         session = store.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
+        session["entities"] = _normalize_entities(store.get_entities(session_id))
         session["review_sessions"] = store.list_review_sessions([session_id]).get(session_id, [])
         return session
 
