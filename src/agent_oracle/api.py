@@ -12,6 +12,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -20,6 +21,7 @@ from fastapi.responses import StreamingResponse
 
 from agent_oracle.agent_payload import source_messages as _source_messages
 from agent_oracle.agent_payload import validated_image_data_url as _validated_image_data_url
+from agent_oracle.agent_recovery import AgentRecoveryLease
 from agent_oracle.agent_session import AgentSessionError, AgentSessionManager, encode_sse
 from agent_oracle.behavior import summarize_messages
 from agent_oracle.embed import Embedder
@@ -61,7 +63,9 @@ def create_app(
     app.state.store = store
     app.state.embedder = embedder
     app.state.summarizer = summarizer
-    app.state.agent_manager = agent_manager or AgentSessionManager()
+    app.state.agent_manager = agent_manager or AgentSessionManager(
+        recovery_lease=AgentRecoveryLease(Path.home() / ".agent-oracle" / "agent-turn.json")
+    )
     app.state.watcher = watcher
 
     app.add_middleware(
@@ -305,6 +309,8 @@ def _register_archived_agent_route(app: FastAPI) -> None:
     @app.get("/api/agent/sessions/{thread_id}")
     def get_archived_agent_session(request: Request, thread_id: str) -> dict[str, Any]:
         """Return an eligible archived Codex transcript without resuming Codex."""
+        if request.app.state.agent_manager.is_running(thread_id) is True:
+            raise HTTPException(status_code=409, detail="agent session is still running")
         _validate_agent_session(request.app.state.store, thread_id)
         session = request.app.state.store.get_session(thread_id)
         assert session is not None

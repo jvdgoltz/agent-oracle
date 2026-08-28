@@ -231,6 +231,18 @@ def test_archived_agent_session_loads_source_transcript_without_starting_codex(
     manager.start.assert_not_called()
 
 
+def test_active_recovered_session_keeps_the_browser_on_the_event_stream() -> None:
+    """A full browser reload does not render an active recovered turn as archived."""
+    manager = MagicMock()
+    manager.is_running.return_value = True
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).get("/api/agent/sessions/saved-thread")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "agent session is still running"}
+
+
 def test_archived_agent_follow_up_resumes_after_a_server_reload() -> None:
     """A follow-up resumes an archived eligible thread when no live state exists."""
     store = MagicMock()

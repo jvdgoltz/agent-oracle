@@ -39,6 +39,7 @@
 		'error',
 		'auth',
 		'user',
+		'recovered',
 		'completed'
 	] as const;
 
@@ -115,6 +116,10 @@
 		}
 		if (agentEvent.type === 'user') {
 			addEntry('user', 'You', extractText(agentEvent.data));
+			return;
+		}
+		if (agentEvent.type === 'recovered') {
+			addEntry('notice', 'Recovered', extractText(agentEvent.data), [agentEvent]);
 			return;
 		}
 		if (agentEvent.type === 'completed') {
