@@ -174,6 +174,7 @@ export interface TokenUsageRow {
 	cache_read_input_tokens: number | null;
 	reasoning_output_tokens: number | null;
 	total_tokens: number | null;
+	cache_hit_rate: number | null;
 }
 
 /** Token statistics for the selected archive scope. */

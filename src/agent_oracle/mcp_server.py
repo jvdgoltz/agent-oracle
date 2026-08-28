@@ -16,13 +16,14 @@ from fastmcp.server import FastMCP
 
 from agent_oracle.embed import Embedder
 from agent_oracle.store import Store
+from agent_oracle.token_usage_summary import summarize_token_usage
 
 logger = logging.getLogger(__name__)
 
 _SESSION_FIELDS = ("agent", "cwd", "title", "started_at")
 
 
-def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:  # noqa: C901
+def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:
     """Create a FastMCP server exposing Agent Oracle search and retrieval tools."""
 
     mcp = FastMCP("agent-oracle")
@@ -68,34 +69,9 @@ def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:  # noqa: C90
         if start_date is not None and end_date is not None and start_date > end_date:
             raise ValueError("start must not be after end")
         rows = store.list_token_usage(agent=agent, start=start_date, end=end_date)
-        grouped: dict[str, dict] = {}
-        for row in rows:
-            for key, label in ((row["agent"], "agent"), (row["model"], "model")):
-                item = grouped.setdefault(f"{label}:{key}", dict.fromkeys(_TOKEN_FIELDS))
-                item[label] = key
-                item["responses"] = (item["responses"] or 0) + row["responses"]
-                for field in _TOKEN_FIELDS[1:]:
-                    if row[field] is not None:
-                        item[field] = (item[field] or 0) + row[field]
-        return {
-            "agent_model": rows,
-            "agents": [v for k, v in grouped.items() if k.startswith("agent:")],
-            "models": [v for k, v in grouped.items() if k.startswith("model:")],
-        }
+        return summarize_token_usage(rows)
 
     return mcp
-
-
-_TOKEN_FIELDS = (
-    "responses",
-    "input_tokens",
-    "output_tokens",
-    "cached_input_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens",
-    "reasoning_output_tokens",
-    "total_tokens",
-)
 
 
 def _enrich(result: dict, store: Store) -> dict:

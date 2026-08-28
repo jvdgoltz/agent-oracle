@@ -59,6 +59,11 @@
 		return value === null ? '—' : `${(value / 1_000_000).toFixed(1)}M`;
 	}
 
+	/** Format a cache hit rate without inventing unavailable telemetry. */
+	function cacheHitRate(value: number | null): string {
+		return value === null ? '—' : `${value.toFixed(1)}%`;
+	}
+
 	/** Return cache tokens reported either as an input subset or separate cache operations. */
 	function cacheTokens(row: TokenUsageReport['agent_model'][number]): number | null {
 		const values = [
@@ -171,7 +176,7 @@
 						<thead
 							><tr
 								><th>Agent</th><th>Model</th><th>Responses</th><th>Uncached input</th><th>Cache</th
-								><th>Output</th><th>Total</th></tr
+								><th>Cache hit rate</th><th>Output</th><th>Total</th></tr
 							></thead
 						>
 						<tbody
@@ -180,11 +185,28 @@
 									><td>{row.agent}</td><td><code>{row.model}</code></td><td>{row.responses}</td><td
 										>{tokenMillions(uncachedInputTokens(row))}</td
 									><td>{tokenMillions(cacheTokens(row))}</td><td
-										>{tokenMillions(row.output_tokens)}</td
-									><td>{tokenMillions(row.total_tokens)}</td></tr
+										>{cacheHitRate(row.cache_hit_rate)}</td
+									><td>{tokenMillions(row.output_tokens)}</td><td
+										>{tokenMillions(row.total_tokens)}</td
+									></tr
 								>
 							{/each}</tbody
 						>
+					</table></ScrollableTable
+				>
+				<h3>Cache hit rate by agent</h3>
+				<ScrollableTable
+					><table>
+						<thead><tr><th>Agent</th><th>Responses</th><th>Cache hit rate</th></tr></thead>
+						<tbody>
+							{#each tokenReport.agents as row (row.agent)}
+								<tr
+									><td>{row.agent}</td><td>{row.responses}</td><td
+										>{cacheHitRate(row.cache_hit_rate)}</td
+									></tr
+								>
+							{/each}
+						</tbody>
 					</table></ScrollableTable
 				>
 			</section>
@@ -375,6 +397,10 @@
 	h2 {
 		font-size: 15px;
 		margin-bottom: var(--s2);
+	}
+	h3 {
+		margin: var(--s4) 0 var(--s2);
+		font-size: 13px;
 	}
 	p,
 	small,
