@@ -1,7 +1,7 @@
 # Agent Oracle
 
 Local web app that archives coding agent sessions (Codex, Factory Droid, Claude Code,
-Oh My Pi) into `~/.agent-oracle/` and makes them searchable with text, vector, and
+Oh My Pi, and Pi) into `~/.agent-oracle/` and makes them searchable with text, vector, and
 hybrid search. Sessions are enriched by an LLM with entities and summaries. The
 backend also serves coding agents themselves via REST + MCP, so agents can search
 past sessions.

@@ -80,6 +80,8 @@ script in the repository root installs, loads, and starts both services.
 - Implement the basic happy path of any functionality or feature first. Only after confirmation from the user, implement the edge cases.
 - Only implement features and functionality that the user asked for.
 - Use red/green TDD.
+- Migration tests must execute the real backup path under the intended transaction and locking
+  arrangement, not only inspect backup existence.
 - If stuck after 2 failed implementation attempts, stop and present a blocker summary with concrete next options.
 - Before handoff, run the smallest relevant tests/lint for touched code and report pass/fail explicitly.
 - Self-improvement: If the user corrects a mistake or gives feedback, suggest a change to the `AGENTS.md` to prevent the same mistake from happening again.

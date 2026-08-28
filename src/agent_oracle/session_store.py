@@ -10,10 +10,15 @@ def delete_session_messages(
 ) -> None:
     """Remove session messages and their search entries when present."""
     if delete_search_entries:
-        connection.execute(
-            "DELETE FROM messages_fts WHERE rowid IN "
-            "(SELECT id FROM messages WHERE session_id = ?)",
+        indexed_messages = connection.execute(
+            "SELECT id, content FROM messages WHERE session_id = ? "
+            "AND role IN ('user', 'assistant') AND NOT is_thinking "
+            "AND NOT is_system_instruction AND NOT is_injected",
             (session_id,),
+        ).fetchall()
+        connection.executemany(
+            "INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', ?, ?)",
+            indexed_messages,
         )
         connection.execute(
             "DELETE FROM vec_messages WHERE rowid IN "

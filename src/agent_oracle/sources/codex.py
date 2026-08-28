@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session, TokenUsage
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
     is_injected_message,
@@ -71,7 +71,7 @@ def load_codex_session(session_id: str, sessions_root: Path | None = None) -> Se
     return None
 
 
-def parse_codex_session(path: Path) -> Session:
+def parse_codex_session(path: Path) -> Session:  # noqa: C901
     """Parse a Codex JSONL session file into a :class:`Session`."""
     session_id = path.stem
     cwd = ""
@@ -81,6 +81,7 @@ def parse_codex_session(path: Path) -> Session:
     current_model: str | None = None
     parent_thread_id: str | None = None
     is_review_agent = False
+    token_usages: list[TokenUsage] = []
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -117,6 +118,20 @@ def parse_codex_session(path: Path) -> Session:
                     user_message_seq=_last_user_message_seq(messages),
                 )
             )
+        elif record_type == "event_msg" and payload.get("type") == "token_count":
+            info = (payload.get("info") or {}).get("last_token_usage", {})
+            if info:
+                token_usages.append(
+                    TokenUsage(
+                        timestamp=timestamp,
+                        model=current_model,
+                        input_tokens=info.get("input_tokens"),
+                        output_tokens=info.get("output_tokens"),
+                        cached_input_tokens=info.get("cached_input_tokens"),
+                        reasoning_output_tokens=info.get("reasoning_output_tokens"),
+                        total_tokens=info.get("total_tokens"),
+                    )
+                )
         elif record_type == "response_item":
             msg = _extract_message(payload, timestamp, current_model)
             if msg is not None:
@@ -133,6 +148,7 @@ def parse_codex_session(path: Path) -> Session:
         started_at=started_at,
         messages=messages,
         interruptions=interruptions,
+        token_usages=token_usages,
         parent_thread_id=parent_thread_id,
         is_review_agent=is_review_agent,
     )

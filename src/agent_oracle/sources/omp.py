@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session, TokenUsage
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
     is_injected_message,
@@ -26,7 +26,7 @@ from agent_oracle.sources.common import (
 )
 
 
-def parse_omp_session(path: Path) -> Session:
+def parse_omp_session(path: Path) -> Session:  # noqa: C901
     """Parse an OMP JSONL session file into a :class:`Session`."""
     session_id = path.stem
     cwd = ""
@@ -36,6 +36,7 @@ def parse_omp_session(path: Path) -> Session:
     title_slot: str | None = None
     header_title: str | None = None
     changed_title: str | None = None
+    token_usages: list[TokenUsage] = []
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -55,6 +56,9 @@ def parse_omp_session(path: Path) -> Session:
         elif record_type == "message":
             timestamp = parse_timestamp(record.get("timestamp", ""))
             message_data = record.get("message", {})
+            usage = message_data.get("usage") or record.get("usage") or {}
+            if usage:
+                token_usages.append(_token_usage(timestamp, message_data.get("model"), usage))
             if (
                 message_data.get("role") == "assistant"
                 and message_data.get("stopReason") == "aborted"
@@ -86,6 +90,7 @@ def parse_omp_session(path: Path) -> Session:
         title=title_slot or changed_title or header_title,
         messages=messages,
         interruptions=interruptions,
+        token_usages=token_usages,
     )
 
 
@@ -160,3 +165,23 @@ def _extract_messages(record: dict, timestamp: datetime) -> list[Message]:
     if text:
         messages.append(build(text))
     return messages
+
+
+def _token_usage(timestamp: datetime, model: str | None, usage: dict) -> TokenUsage:
+    """Normalize provider usage fields found in an OMP response."""
+    return TokenUsage(
+        timestamp=timestamp,
+        model=model,
+        input_tokens=_value(usage, "input_tokens", "input"),
+        output_tokens=_value(usage, "output_tokens", "output"),
+        cached_input_tokens=usage.get("cached_input_tokens"),
+        cache_creation_input_tokens=_value(usage, "cache_creation_input_tokens", "cacheWrite"),
+        cache_read_input_tokens=_value(usage, "cache_read_input_tokens", "cacheRead"),
+        reasoning_output_tokens=_value(usage, "reasoning_output_tokens", "reasoning"),
+        total_tokens=_value(usage, "total_tokens", "totalTokens"),
+    )
+
+
+def _value(values: dict, snake: str, camel: str) -> int | None:
+    """Read a usage field while preserving a reported zero."""
+    return values[snake] if snake in values else values.get(camel)

@@ -15,6 +15,9 @@ from agent_oracle import session_store
 from agent_oracle.behavior_store import list_behavior_messages as query_behavior_messages
 from agent_oracle.models import Session
 from agent_oracle.overview_store import list_overview_rows as query_overview_rows
+from agent_oracle.search_store import sanitize_fts_query
+from agent_oracle.token_usage_store import list_token_usage as query_token_usage
+from agent_oracle.token_usage_store import replace_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -36,24 +39,6 @@ def _merge_by_score(
     merged = [dict(r) for r in (*message_rows, *summary_rows) if r[score_key] is not None]
     merged.sort(key=lambda r: r[score_key])
     return merged
-
-
-def _sanitize_fts_query(query: str) -> str:
-    """Escape a user query into a safe FTS5 MATCH expression.
-
-    FTS5 treats characters like ``? * " ( )`` as query syntax.  To avoid
-    syntax errors, each whitespace-separated token is wrapped in double
-    quotes (phrase query), and any embedded double quotes are doubled
-    (FTS5 escape rule).  Returns an empty string if nothing remains.
-    """
-    tokens = query.strip().split()
-    if not tokens:
-        return ""
-    escaped = []
-    for token in tokens:
-        safe = token.replace('"', '""')
-        escaped.append(f'"{safe}"')
-    return " ".join(escaped)
 
 
 class Store:
@@ -156,6 +141,7 @@ class Store:
     def index_session(self, session: Session) -> None:
         """Insert or replace *session* and its messages (regular table + FTS5)."""
         self._delete_session_messages(session.id, delete_search_entries=not session.is_review_agent)
+        replace_token_usage(self.conn, session)
         interrupted_messages = session.interruption_models
         self.conn.execute(
             "INSERT OR REPLACE INTO sessions "
@@ -324,7 +310,7 @@ class Store:
 
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """FTS5 BM25 search over messages and session summaries."""
-        fts_query = _sanitize_fts_query(query)
+        fts_query = sanitize_fts_query(query)
         if not fts_query:
             return []
         message_rows = self.conn.execute(
@@ -478,6 +464,12 @@ class Store:
     ) -> dict[str, list[dict]]:
         """Return scoped sessions and visible messages for overview statistics."""
         return query_overview_rows(self.conn, agent=agent, start=start, end=end)
+
+    def list_token_usage(
+        self, *, agent: str | None = None, start: date | None = None, end: date | None = None
+    ) -> list[dict]:
+        """Return token usage grouped by agent, model, and their combination."""
+        return query_token_usage(self.conn, agent=agent, start=start, end=end)
 
     def is_session_indexed(self, session_id: str) -> bool:
         """Return True if *session_id* exists and has been enriched."""

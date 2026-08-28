@@ -114,7 +114,12 @@ def test_create_mcp_server_registers_all_tools() -> None:
     """All three tools are registered on the returned server."""
     server = _make_server()
 
-    assert set(_tool_names(server)) == {"search_sessions", "get_session", "list_recent_sessions"}
+    assert set(_tool_names(server)) == {
+        "search_sessions",
+        "get_session",
+        "list_recent_sessions",
+        "token_usage_stats",
+    }
 
 
 # --------------------------------------------------------------------------- #

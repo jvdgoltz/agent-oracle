@@ -32,6 +32,7 @@ from agent_oracle.sources.codex import (
     load_codex_session,
 )
 from agent_oracle.store import Store
+from agent_oracle.token_usage_api import register_token_usage_route
 
 if TYPE_CHECKING:
     from agent_oracle.watcher import SessionWatcher
@@ -143,6 +144,7 @@ def _register_routes(app: FastAPI) -> None:
     register_enrich_route(app)
     _register_behavior_route(app)
     _register_overview_route(app)
+    register_token_usage_route(app)
     _register_agent_routes(app)
 
     @app.get("/api/entities")
@@ -158,7 +160,7 @@ def _register_behavior_route(app: FastAPI) -> None:
     @app.get("/api/stats/behavior")
     def behavior(
         request: Request,
-        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp)$")] = None,
+        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp|pi)$")] = None,
         start: date | None = None,
         end: date | None = None,
     ) -> dict[str, Any]:
@@ -179,7 +181,7 @@ def _register_overview_route(app: FastAPI) -> None:
     @app.get("/api/stats/overview")
     def overview(
         request: Request,
-        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp)$")] = None,
+        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp|pi)$")] = None,
         start: date | None = None,
         end: date | None = None,
     ) -> dict[str, Any]:

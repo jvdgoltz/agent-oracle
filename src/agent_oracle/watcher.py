@@ -1,6 +1,7 @@
 """File watcher for Agent Oracle.
 
-Watches the session directories of Codex, Factory Droid, and Claude Code and
+Watches the session directories of Codex, Factory Droid, Claude Code, Oh My Pi,
+and Pi and indexes
 indexes new or modified session files into the store.  A debounce collapses the
 burst of modify events emitted during a write into a single re-index per file.
 """
@@ -22,6 +23,7 @@ from agent_oracle.sources.claude import parse_claude_session
 from agent_oracle.sources.codex import parse_codex_session
 from agent_oracle.sources.factory import parse_factory_session
 from agent_oracle.sources.omp import parse_omp_session
+from agent_oracle.sources.pi import parse_pi_session
 from agent_oracle.store import Store
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,7 @@ _PARSERS: dict[AgentType, Callable[[Path], Session]] = {
     AgentType.FACTORY: parse_factory_session,
     AgentType.CLAUDE: parse_claude_session,
     AgentType.OMP: parse_omp_session,
+    AgentType.PI: parse_pi_session,
 }
 
 
@@ -45,6 +48,7 @@ def _watched_dirs() -> dict[AgentType, Path]:
         AgentType.FACTORY: _HOME / ".factory" / "sessions",
         AgentType.CLAUDE: _HOME / ".claude" / "projects",
         AgentType.OMP: _HOME / ".omp" / "agent" / "sessions",
+        AgentType.PI: _HOME / ".pi" / "agent" / "sessions",
     }
 
 

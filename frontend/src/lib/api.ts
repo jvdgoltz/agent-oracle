@@ -162,8 +162,42 @@ export interface OverviewReport {
 	}[];
 }
 
+/** Token totals reported by one agent/model grouping. */
+export interface TokenUsageRow {
+	agent: string | null;
+	model: string | null;
+	responses: number;
+	input_tokens: number | null;
+	output_tokens: number | null;
+	cached_input_tokens: number | null;
+	cache_creation_input_tokens: number | null;
+	cache_read_input_tokens: number | null;
+	reasoning_output_tokens: number | null;
+	total_tokens: number | null;
+}
+
+/** Token statistics for the selected archive scope. */
+export interface TokenUsageReport {
+	agent_model: TokenUsageRow[];
+	agents: TokenUsageRow[];
+	models: TokenUsageRow[];
+}
+
 /** Valid search modes accepted by the backend. */
 export type SearchMode = 'text' | 'vector' | 'hybrid';
+
+/** Fetch provider-reported token totals for the selected scope. */
+export function getTokenUsageStats(
+	agent?: string,
+	start?: string,
+	end?: string
+): Promise<TokenUsageReport> {
+	const params = new URLSearchParams();
+	if (agent) params.set('agent', agent);
+	if (start) params.set('start', start);
+	if (end) params.set('end', end);
+	return get(`/api/stats/tokens?${params}`);
+}
 
 /**
  * Perform a request against the backend and parse the JSON response.

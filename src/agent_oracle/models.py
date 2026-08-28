@@ -1,6 +1,6 @@
 """Core data models for Agent Oracle.
 
-Every source normalizer (Codex, Factory Droid, Claude Code) produces instances
+Every source normalizer produces instances
 of :class:`Session` containing a list of :class:`Message` records.  This shared
 shape is what the store, embeddings, and API consume.
 """
@@ -19,6 +19,7 @@ class AgentType(StrEnum):
     FACTORY = "factory"
     CLAUDE = "claude"
     OMP = "omp"
+    PI = "pi"
 
 
 class MessageRole(StrEnum):
@@ -68,6 +69,21 @@ class Interruption:
 
 
 @dataclass(frozen=True, slots=True)
+class TokenUsage:
+    """Provider-reported token counts for one model response."""
+
+    timestamp: datetime
+    model: str | None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Session:
     """A coding agent session with its messages."""
 
@@ -77,6 +93,7 @@ class Session:
     started_at: datetime
     messages: list[Message] = field(default_factory=list)
     interruptions: list[Interruption] = field(default_factory=list)
+    token_usages: list[TokenUsage] = field(default_factory=list)
     title: str | None = None
     parent_thread_id: str | None = None
     is_review_agent: bool = False

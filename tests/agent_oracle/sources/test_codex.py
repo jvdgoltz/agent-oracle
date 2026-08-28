@@ -159,6 +159,22 @@ def test_parse_skips_non_message_records(tmp_path: Path) -> None:
     assert len(session.messages) == 0
 
 
+def test_parse_skips_token_count_without_usage_info(tmp_path: Path) -> None:
+    """A token-count event with null info does not abort session parsing."""
+    session = parse_codex_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {"type": "session_meta", "payload": {"id": "null-usage", "cwd": "/x"}},
+                {"type": "event_msg", "payload": {"type": "token_count", "info": None}},
+            ],
+        )
+    )
+
+    assert session.id == "null-usage"
+    assert session.token_usages == []
+
+
 def test_parse_concatenates_content_parts(tmp_path: Path) -> None:
     """Multiple content parts in a single message are joined."""
     lines = [

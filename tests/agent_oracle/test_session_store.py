@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import sqlite_vec
 
-from agent_oracle.models import AgentType, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Message, MessageRole, Session, TokenUsage
 from agent_oracle.store import Store
 
 
@@ -75,6 +75,26 @@ def test_review_session_can_be_reindexed_without_fts_rows(store: Store) -> None:
     assert store.get_session("review") is not None
 
 
+def test_regular_session_can_be_reindexed_without_corrupting_external_content_fts(
+    store: Store,
+) -> None:
+    """Re-indexing replaces external-content FTS rows with their original text."""
+    original = _session(
+        "regular",
+        messages=[
+            _message("injected instructions", MessageRole.SYSTEM),
+            _message("original searchable text"),
+        ],
+    )
+    replacement = _session("regular", messages=[_message("replacement searchable text")])
+
+    store.index_session(original)
+    store.index_session(replacement)
+
+    assert store.search_text("original") == []
+    assert [row["session_id"] for row in store.search_text("replacement")] == ["regular"]
+
+
 def test_search_excludes_stale_review_entries(store: Store) -> None:
     """Search filters review entries left by an earlier database version."""
     store.index_session(
@@ -130,3 +150,39 @@ def test_missing_session_and_entities_return_empty_values(store: Store) -> None:
     """Missing retrieval targets return their documented empty values."""
     assert store.get_session("does-not-exist") is None
     assert store.get_entities("does-not-exist") == []
+
+
+def test_token_usage_is_grouped_without_cumulative_double_count(store: Store) -> None:
+    """Usage rows aggregate provider-reported per-response values."""
+    store.conn.execute("""CREATE TABLE token_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        timestamp TEXT NOT NULL, model TEXT, input_tokens INTEGER, output_tokens INTEGER,
+        cached_input_tokens INTEGER, cache_creation_input_tokens INTEGER,
+        cache_read_input_tokens INTEGER, reasoning_output_tokens INTEGER, total_tokens INTEGER
+    )""")
+    session = Session(
+        id="tokens",
+        agent=AgentType.CODEX,
+        cwd="/tmp/project",
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        token_usages=[
+            TokenUsage(
+                datetime(2026, 1, 1, tzinfo=UTC),
+                "gpt",
+                input_tokens=10,
+                output_tokens=2,
+                total_tokens=12,
+            ),
+            TokenUsage(
+                datetime(2026, 1, 1, tzinfo=UTC),
+                "gpt",
+                input_tokens=20,
+                output_tokens=3,
+                total_tokens=23,
+            ),
+        ],
+    )
+    store.index_session(session)
+    rows = store.list_token_usage()
+    assert rows[0]["input_tokens"] == 30
+    assert rows[0]["total_tokens"] == 35

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getBehaviorStats, type BehaviorReport, type BehaviorSummary } from '$lib/api';
+	import ScrollableTable from '$lib/ScrollableTable.svelte';
 
 	/** Signals exposed by OMP's user-metrics classifier. */
 	const SIGNALS: {
@@ -127,7 +128,9 @@
 			<select bind:value={agent}>
 				<option value="">All agents</option><option value="codex">Codex</option><option
 					value="factory">Factory</option
-				><option value="claude">Claude</option><option value="omp">OMP</option>
+				><option value="claude">Claude</option><option value="omp">OMP</option><option value="pi"
+					>Pi</option
+				>
 			</select>
 		</label>
 		<label>From <input type="date" bind:value={start} /></label>
@@ -284,7 +287,7 @@
 					Normal rows use the previous eligible assistant response; interruptions use the
 					source-recorded model.
 				</p>
-				<div class="table-scroll">
+				<ScrollableTable>
 					<table>
 						<thead
 							><tr
@@ -307,11 +310,11 @@
 								>{/each}
 						</tbody>
 					</table>
-				</div>
+				</ScrollableTable>
 			</section>
 			<section>
 				<h2>By agent</h2>
-				<div class="table-scroll">
+				<ScrollableTable>
 					<table>
 						<thead
 							><tr
@@ -333,11 +336,11 @@
 								>{/each}
 						</tbody>
 					</table>
-				</div>
+				</ScrollableTable>
 			</section>
 			<section>
 				<h2>By project</h2>
-				<div class="table-scroll">
+				<ScrollableTable>
 					<table>
 						<thead
 							><tr
@@ -360,11 +363,11 @@
 								>{/each}
 						</tbody>
 					</table>
-				</div>
+				</ScrollableTable>
 			</section>
 			<section>
 				<h2>Daily trend</h2>
-				<div class="table-scroll">
+				<ScrollableTable>
 					<table>
 						<thead
 							><tr
@@ -390,7 +393,7 @@
 							{/each}
 						</tbody>
 					</table>
-				</div>
+				</ScrollableTable>
 			</section>
 		</div>
 	{/if}
@@ -680,9 +683,6 @@
 	table {
 		width: 100%;
 		border-collapse: collapse;
-	}
-	.table-scroll {
-		overflow-x: auto;
 	}
 	th,
 	td {

@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session, TokenUsage
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
     is_injected_message,
@@ -36,6 +36,8 @@ def parse_claude_session(path: Path) -> Session:
     interruptions: list[Interruption] = []
     assistant_models: dict[str, str | None] = {}
     title: str | None = None
+    token_usages: list[TokenUsage] = []
+    usage_ids: set[str] = set()
 
     for line in path.read_text().splitlines():
         record = parse_jsonl_line(line)
@@ -67,7 +69,33 @@ def parse_claude_session(path: Path) -> Session:
             )
             continue
         if record_type == "assistant" and record.get("message", {}).get("id"):
-            assistant_models[str(record["message"]["id"])] = record["message"].get("model")
+            message_id = str(record["message"]["id"])
+            assistant_models[message_id] = record["message"].get("model")
+            usage = record.get("message", {}).get("usage") or {}
+            if usage and message_id not in usage_ids:
+                usage_ids.add(message_id)
+                token_usages.append(
+                    TokenUsage(
+                        timestamp=timestamp,
+                        model=record["message"].get("model"),
+                        input_tokens=usage.get("input_tokens"),
+                        output_tokens=usage.get("output_tokens"),
+                        cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
+                        cache_read_input_tokens=usage.get("cache_read_input_tokens"),
+                        total_tokens=sum(
+                            usage.get(field, 0) or 0
+                            for field in (
+                                "input_tokens",
+                                "cache_creation_input_tokens",
+                                "cache_read_input_tokens",
+                                "output_tokens",
+                            )
+                        )
+                        if usage.get("input_tokens") is not None
+                        or usage.get("output_tokens") is not None
+                        else None,
+                    )
+                )
         msg = _extract_messages(record, timestamp)
         messages.extend(msg)
 
@@ -79,6 +107,7 @@ def parse_claude_session(path: Path) -> Session:
         title=title,
         messages=messages,
         interruptions=_deduplicate_interruptions(interruptions),
+        token_usages=token_usages,
     )
 
 
