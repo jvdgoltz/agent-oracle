@@ -427,9 +427,11 @@ def test_index_existing_discovers_all_watched_dirs(tmp_path: Path) -> None:
 
 
 def test_reindex_session_processes_only_matching_source(tmp_path: Path) -> None:
-    """Targeted re-indexing finds and processes only the requested session."""
+    """Targeted re-indexing finds an archived source without processing others."""
     dirs = _map_dirs(tmp_path)
-    matching = _codex_jsonl(dirs[AgentType.CODEX])
+    archived_dir = tmp_path / ".codex" / "archived_sessions"
+    archived_dir.mkdir()
+    matching = _codex_jsonl(archived_dir)
     other = dirs[AgentType.CODEX] / "other.jsonl"
     other.write_text(matching.read_text().replace("codex-sess", "other-sess"))
     watcher, store, _embedder, enricher = _make_watcher()
@@ -441,6 +443,7 @@ def test_reindex_session_processes_only_matching_source(tmp_path: Path) -> None:
         assert watcher.reindex_session("codex-sess")
 
     assert store.index_session.call_args.args[0].messages[0].content == "changed"
+    enricher.enrich.assert_called_once()
     assert not watcher.reindex_session("missing")
 
 

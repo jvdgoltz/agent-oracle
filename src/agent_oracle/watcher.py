@@ -105,7 +105,8 @@ class SessionWatcher:
 
     def reindex_session(self, session_id: str, *, clear_existing: bool = False) -> bool:
         """Re-index the watched source file belonging to ``session_id``."""
-        for directory in _watched_dirs().values():
+        directories = [*_watched_dirs().values(), _HOME / ".codex" / "archived_sessions"]
+        for directory in directories:
             if not directory.exists():
                 continue
             for path in directory.rglob("*.jsonl"):
@@ -197,6 +198,8 @@ class SessionWatcher:
     def _detect_parser(self, path: Path) -> Callable[[Path], Session] | None:
         """Return the normalizer matching the file's location, or None."""
         text = str(path)
+        if str(_HOME / ".codex" / "archived_sessions") in text:
+            return parse_codex_session
         for agent, directory in _watched_dirs().items():
             if str(directory) in text:
                 return _PARSERS[agent]

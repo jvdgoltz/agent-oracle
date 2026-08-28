@@ -2,9 +2,15 @@
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from agent_oracle.models import AgentType, MessageRole
-from agent_oracle.sources.codex import load_codex_session, parse_codex_session
+from agent_oracle.sources.codex import (
+    _read_codex_title,
+    is_codex_session_archived,
+    load_codex_session,
+    parse_codex_session,
+)
 
 
 def _write_jsonl(tmp_path: Path, lines: list[dict]) -> Path:
@@ -83,6 +89,24 @@ def test_parse_uses_latest_codex_thread_name(tmp_path: Path) -> None:
     )
 
     assert parse_codex_session(path).title == "Current title"
+
+
+def test_state_title_lookup_closes_sqlite_connection(tmp_path: Path, monkeypatch) -> None:
+    """State database title lookup releases its read-only connection."""
+    session_dir = tmp_path / ".codex" / "sessions" / "2026" / "08" / "25"
+    session_dir.mkdir(parents=True)
+    path = session_dir / "rollout-sess-title.jsonl"
+    state_path = tmp_path / ".codex" / "state_5.sqlite"
+    state_path.touch()
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.execute.return_value.fetchone.return_value = ("State title", None)
+    monkeypatch.setattr(
+        "agent_oracle.sources.codex.sqlite3.connect", lambda *_args, **_kwargs: connection
+    )
+
+    assert _read_codex_title(path, "sess-title") == "State title"
+    connection.close.assert_called_once_with()
 
 
 def test_parse_preserves_review_parent_metadata(tmp_path: Path) -> None:
@@ -369,3 +393,26 @@ def test_load_codex_session_reads_the_matching_local_thread(tmp_path: Path) -> N
     assert session is not None
     assert session.id == "thread-1"
     assert load_codex_session("missing", tmp_path) is None
+
+
+def test_load_codex_session_finds_an_archived_thread(tmp_path: Path, monkeypatch) -> None:
+    """Default lookup reads Codex sessions after Codex archives their JSONL."""
+    codex_home = tmp_path / ".codex"
+    archived = codex_home / "archived_sessions" / "rollout-2026-thread-1.jsonl"
+    archived.parent.mkdir(parents=True)
+    archived.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "thread-1", "cwd": "/tmp/project"},
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    session = load_codex_session("thread-1")
+
+    assert session is not None
+    assert session.id == "thread-1"
+    assert is_codex_session_archived("thread-1") is True

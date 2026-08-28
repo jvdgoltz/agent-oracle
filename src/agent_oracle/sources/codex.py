@@ -13,6 +13,7 @@ Each line is a JSON object with ``type`` and ``payload`` fields:
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -26,10 +27,44 @@ from agent_oracle.sources.common import (
 )
 
 
+def find_codex_session_path(session_id: str, sessions_root: Path | None = None) -> Path | None:
+    """Find an active or archived Codex JSONL by its stable thread ID."""
+    roots = (
+        (sessions_root,)
+        if sessions_root is not None
+        else (
+            Path.home() / ".codex" / "sessions",
+            Path.home() / ".codex" / "archived_sessions",
+        )
+    )
+    for root in roots:
+        for path in root.rglob(f"*-{session_id}.jsonl"):
+            return path
+    return None
+
+
+def is_codex_session_archived(session_id: str) -> bool:
+    """Return whether Codex moved a thread into its archived session directory."""
+    path = find_codex_session_path(session_id)
+    archive_root = Path.home() / ".codex" / "archived_sessions"
+    return path is not None and path.is_relative_to(archive_root)
+
+
+def archived_codex_session_ids(session_ids: set[str]) -> set[str]:
+    """Return candidate thread IDs whose JSONL is in the Codex archive."""
+    archive_root = Path.home() / ".codex" / "archived_sessions"
+    filenames = [path.name for path in archive_root.rglob("*.jsonl")]
+    return {
+        session_id
+        for session_id in session_ids
+        if any(name.endswith(f"-{session_id}.jsonl") for name in filenames)
+    }
+
+
 def load_codex_session(session_id: str, sessions_root: Path | None = None) -> Session | None:
-    """Load one local Codex session JSONL by its stable thread ID."""
-    root = sessions_root or Path.home() / ".codex" / "sessions"
-    for path in root.rglob(f"*-{session_id}.jsonl"):
+    """Load one active or archived Codex session by its stable thread ID."""
+    path = find_codex_session_path(session_id, sessions_root)
+    if path is not None:
         session = parse_codex_session(path)
         if session.id == session_id:
             return session
@@ -105,7 +140,10 @@ def parse_codex_session(path: Path) -> Session:
 
 def _read_codex_title(path: Path, session_id: str) -> str | None:
     """Read the latest Codex thread name, falling back to state metadata."""
-    sessions_root = next((parent for parent in path.parents if parent.name == "sessions"), None)
+    sessions_root = next(
+        (parent for parent in path.parents if parent.name in {"sessions", "archived_sessions"}),
+        None,
+    )
     if sessions_root is None:
         return None
     codex_home = sessions_root.parent
@@ -122,7 +160,7 @@ def _read_codex_title(path: Path, session_id: str) -> str | None:
     if not state_path.exists():
         return None
     try:
-        with sqlite3.connect(f"file:{state_path}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(f"file:{state_path}?mode=ro", uri=True)) as connection:
             row = connection.execute(
                 "SELECT name, title FROM threads WHERE id = ?", (session_id,)
             ).fetchone()

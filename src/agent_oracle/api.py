@@ -26,7 +26,11 @@ from agent_oracle.embed import Embedder
 from agent_oracle.overview_summary import summarize_overview
 from agent_oracle.search_summary import SearchSummarizer
 from agent_oracle.session_api import register_enrich_route, register_summary_route
-from agent_oracle.sources.codex import load_codex_session
+from agent_oracle.sources.codex import (
+    archived_codex_session_ids,
+    is_codex_session_archived,
+    load_codex_session,
+)
 from agent_oracle.store import Store
 
 if TYPE_CHECKING:
@@ -299,7 +303,7 @@ def _register_archived_agent_route(app: FastAPI) -> None:
     @app.get("/api/agent/sessions/{thread_id}")
     def get_archived_agent_session(request: Request, thread_id: str) -> dict[str, Any]:
         """Return an eligible archived Codex transcript without resuming Codex."""
-        _validate_resume_session(request.app.state.store, thread_id)
+        _validate_agent_session(request.app.state.store, thread_id)
         session = request.app.state.store.get_session(thread_id)
         assert session is not None
         source_session = load_codex_session(thread_id)
@@ -348,7 +352,14 @@ def _agent_repo_root() -> str:
 
 
 def _validate_resume_session(store: Store, thread_id: str) -> None:
-    """Reject thread IDs that are not archived Codex sessions for this repository."""
+    """Reject thread IDs that Codex cannot resume in this repository."""
+    _validate_agent_session(store, thread_id)
+    if is_codex_session_archived(thread_id):
+        raise HTTPException(status_code=422, detail="Session cannot be resumed in this repository")
+
+
+def _validate_agent_session(store: Store, thread_id: str) -> None:
+    """Reject thread IDs that are not readable Codex sessions for this repository."""
     session = store.get_session(thread_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Resumable Codex session not found")
@@ -372,7 +383,8 @@ def _resumable_sessions(store: Store) -> list[dict[str, Any]]:
             if session.get("agent") == "codex" and session.get("cwd") == _agent_repo_root()
         )
         if len(page) < 200:
-            return candidates
+            archived_ids = archived_codex_session_ids({session["id"] for session in candidates})
+            return [session for session in candidates if session["id"] not in archived_ids]
         offset += len(page)
 
 

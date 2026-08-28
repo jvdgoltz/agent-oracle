@@ -26,6 +26,12 @@ Whenever making changes to the backend, test the affected endpoints by calling
 them (e.g. via `curl http://localhost:8731/api/...`) and the MCP endpoints.
 Do not rely on unit tests alone to verify backend behavior.
 
+### End-to-end verification
+For changes that affect the running application, verify the live REST API and
+MCP protocol with direct calls, then use a browser to exercise the relevant UI
+flow and confirm the visible result. Unit, integration, and frontend checks do
+not replace this end-to-end verification.
+
 ### Running services
 Both the backend and frontend are managed by `launchd` and may already be
 running in the background. Before starting either service manually, check
