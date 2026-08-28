@@ -59,6 +59,22 @@
 		return value === null ? '—' : `${(value / 1_000_000).toFixed(1)}M`;
 	}
 
+	/** Return cache tokens reported either as an input subset or separate cache operations. */
+	function cacheTokens(row: TokenUsageReport['agent_model'][number]): number | null {
+		const values = [
+			row.cached_input_tokens,
+			row.cache_creation_input_tokens,
+			row.cache_read_input_tokens
+		].filter((value): value is number => value !== null);
+		return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+	}
+
+	/** Normalize input to exclude cache tokens that a provider includes in its input count. */
+	function uncachedInputTokens(row: TokenUsageReport['agent_model'][number]): number | null {
+		if (row.input_tokens === null) return null;
+		return Math.max(0, row.input_tokens - (row.cached_input_tokens ?? 0));
+	}
+
 	/** Return a safe percentage for a horizontal bar. */
 	function width(value: number, maximum: number): string {
 		return `${maximum > 0 && value > 0 ? Math.max(3, (value / maximum) * 100) : 0}%`;
@@ -154,19 +170,18 @@
 					><table>
 						<thead
 							><tr
-								><th>Agent</th><th>Model</th><th>Responses</th><th>Input</th><th>Output</th><th
-									>Total</th
-								></tr
+								><th>Agent</th><th>Model</th><th>Responses</th><th>Uncached input</th><th>Cache</th
+								><th>Output</th><th>Total</th></tr
 							></thead
 						>
 						<tbody
 							>{#each tokenReport.agent_model as row (`${row.agent}:${row.model}`)}
 								<tr
 									><td>{row.agent}</td><td><code>{row.model}</code></td><td>{row.responses}</td><td
-										>{tokenMillions(row.input_tokens)}</td
-									><td>{tokenMillions(row.output_tokens)}</td><td
-										>{tokenMillions(row.total_tokens)}</td
-									></tr
+										>{tokenMillions(uncachedInputTokens(row))}</td
+									><td>{tokenMillions(cacheTokens(row))}</td><td
+										>{tokenMillions(row.output_tokens)}</td
+									><td>{tokenMillions(row.total_tokens)}</td></tr
 								>
 							{/each}</tbody
 						>
