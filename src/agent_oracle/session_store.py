@@ -46,6 +46,8 @@ def list_sessions(
     offset: int,
     *,
     include_review_agents: bool,
+    agent: str | None = None,
+    cwd: str | None = None,
 ) -> list[dict]:
     """Return sessions ordered by start time with pagination."""
     rows = connection.execute(
@@ -53,13 +55,26 @@ def list_sessions(
         SELECT id, agent, cwd, title, started_at, summary, enriched,
                parent_thread_id, is_review_agent
         FROM sessions
-        WHERE ? OR NOT is_review_agent
+        WHERE (? OR NOT is_review_agent)
+          AND (? IS NULL OR agent = ?)
+          AND (? IS NULL OR cwd = ?)
         ORDER BY started_at DESC
         LIMIT ? OFFSET ?
         """,
-        (include_review_agents, limit, offset),
+        (include_review_agents, agent, agent, cwd, cwd, limit, offset),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def count_sessions(
+    connection: sqlite3.Connection, *, include_review_agents: bool, agent: str | None = None
+) -> int:
+    """Count sessions matching the feed visibility and agent filters."""
+    return connection.execute(
+        "SELECT COUNT(*) FROM sessions WHERE (? OR NOT is_review_agent) "
+        "AND (? IS NULL OR agent = ?)",
+        (include_review_agents, agent, agent),
+    ).fetchone()[0]
 
 
 def list_review_sessions(
@@ -70,7 +85,7 @@ def list_review_sessions(
         return {}
     placeholders = ",".join("?" for _ in parent_thread_ids)
     rows = connection.execute(
-        "SELECT id, agent, cwd, title, started_at, summary, parent_thread_id "
+        "SELECT id, agent, cwd, started_at, summary, parent_thread_id "
         "FROM sessions WHERE is_review_agent "
         f"AND parent_thread_id IN ({placeholders}) ORDER BY started_at",
         parent_thread_ids,

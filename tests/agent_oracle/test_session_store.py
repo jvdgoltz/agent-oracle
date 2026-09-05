@@ -186,3 +186,30 @@ def test_token_usage_is_grouped_without_cumulative_double_count(store: Store) ->
     rows = store.list_token_usage()
     assert rows[0]["input_tokens"] == 30
     assert rows[0]["total_tokens"] == 35
+
+
+def test_session_filters_apply_before_pagination_and_count(store: Store) -> None:
+    """Agent and repository filters select full pages and matching totals."""
+    for day, agent in [
+        (1, AgentType.CLAUDE),
+        (2, AgentType.CODEX),
+        (3, AgentType.CLAUDE),
+        (4, AgentType.CODEX),
+    ]:
+        store.index_session(
+            _session(f"s{day}", agent=agent, started_at=datetime(2026, 1, day, tzinfo=UTC))
+        )
+    store.index_session(_session("review", agent=AgentType.CLAUDE, is_review_agent=True))
+    assert [row["id"] for row in store.list_sessions(limit=1, offset=1, agent="claude")] == ["s1"]
+    assert store.count_sessions(agent="claude") == 2
+    assert store.count_sessions(agent="claude", include_review_agents=True) == 3
+    assert store.list_sessions(agent="claude", cwd="/missing") == []
+    assert len(store.list_sessions(limit=-1, agent="claude", cwd="/tmp/project")) == 2
+
+
+def test_review_summaries_omit_unused_title(store: Store) -> None:
+    """Review navigation does not carry potentially large generated titles."""
+    store.index_session(_session("review", parent_thread_id="parent", is_review_agent=True))
+    review = store.list_review_sessions(["parent"])["parent"][0]
+    assert review["id"] == "review"
+    assert "title" not in review

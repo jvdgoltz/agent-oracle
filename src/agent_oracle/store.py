@@ -7,15 +7,13 @@ import sqlite3
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 import sqlite_vec
 
-from agent_oracle import session_store
+from agent_oracle import search_store, session_store
 from agent_oracle.behavior_store import list_behavior_messages as query_behavior_messages
 from agent_oracle.models import Session
 from agent_oracle.overview_store import list_overview_rows as query_overview_rows
-from agent_oracle.search_store import sanitize_fts_query
 from agent_oracle.token_usage_store import list_token_usage as query_token_usage
 from agent_oracle.token_usage_store import replace_token_usage
 
@@ -25,20 +23,6 @@ _EMBED_DIM = 384
 _RRF_K = 60
 _REVIEW_SCHEMA_COLUMNS = {"is_review_agent", "parent_thread_id"}
 _REVIEW_MIGRATION_COMMAND = "uv run python scripts/backfill_codex_review_sessions.py --write"
-
-
-def _merge_by_score(
-    message_rows: list[sqlite3.Row], summary_rows: list[sqlite3.Row], score_key: str
-) -> list[dict[str, Any]]:
-    """Merge message and summary rows, ordered by *score_key*, dropping NULLs.
-
-    NULL scores (e.g. ``bm25()`` on rows whose FTS5 docsize entry is missing)
-    cannot be ordered and indicate an unscoreable match, so those rows are
-    dropped rather than crashing the sort.
-    """
-    merged = [dict(r) for r in (*message_rows, *summary_rows) if r[score_key] is not None]
-    merged.sort(key=lambda r: r[score_key])
-    return merged
 
 
 class Store:
@@ -57,7 +41,10 @@ class Store:
 
     def _connect(self) -> sqlite3.Connection:
         """Open the SQLite connection and load the sqlite-vec extension."""
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
+        # Shared cached statements race across API threads (CPython issue #118172).
+        conn = sqlite3.connect(
+            str(self.db_path), check_same_thread=False, timeout=30, cached_statements=0
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 30000")
         conn.enable_load_extension(True)
@@ -308,96 +295,33 @@ class Store:
         logger.info("Backfilled summary indexes: %d FTS, %d vectors", len(need_fts), len(need_vec))
         return len(need_fts) + len(need_vec)
 
-    def search_text(self, query: str, limit: int = 20) -> list[dict]:
+    def search_text(
+        self, query: str, limit: int = 20, *, agent: str | None = None, entity: str | None = None
+    ) -> list[dict]:
         """FTS5 BM25 search over messages and session summaries."""
-        fts_query = sanitize_fts_query(query)
-        if not fts_query:
-            return []
-        message_rows = self.conn.execute(
-            """
-            SELECT m.session_id        AS session_id,
-                   m.id                AS message_id,
-                   s.agent             AS agent,
-                   s.cwd               AS cwd,
-                   s.title      AS title,
-                   s.started_at        AS started_at,
-                   s.summary           AS summary,
-                   snippet(messages_fts, 0, '[', ']', '...', 8) AS snippet,
-                   bm25(messages_fts)   AS rank
-            FROM messages_fts
-            JOIN messages m ON m.id = messages_fts.rowid
-            JOIN sessions s ON s.id = m.session_id
-            WHERE messages_fts MATCH ? AND NOT s.is_review_agent
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (fts_query, limit),
-        ).fetchall()
-        summary_rows = self.conn.execute(
-            """
-            SELECT s.id                              AS session_id,
-                   NULL                              AS message_id,
-                   s.agent                           AS agent,
-                   s.cwd                             AS cwd,
-                   s.title      AS title,
-                   s.started_at                      AS started_at,
-                   s.summary                         AS summary,
-                   snippet(sessions_fts, 0, '[', ']', '...', 8) AS snippet,
-                   bm25(sessions_fts)                AS rank
-            FROM sessions_fts
-            JOIN sessions s ON s.rowid = sessions_fts.rowid
-            WHERE sessions_fts MATCH ? AND NOT s.is_review_agent
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (fts_query, limit),
-        ).fetchall()
-        return _merge_by_score(message_rows, summary_rows, "rank")[:limit]
+        return search_store.search_text(self.conn, query, limit, agent=agent, entity=entity)
 
-    def search_vector(self, query_embedding: list[float], limit: int = 20) -> list[dict]:
-        """sqlite-vec cosine search over message and summary embeddings."""
-        blob = sqlite_vec.serialize_float32(query_embedding)
-        message_rows = self.conn.execute(
-            """
-            SELECT m.session_id AS session_id,
-                   m.id         AS message_id,
-                   s.agent      AS agent,
-                   s.cwd        AS cwd,
-                   s.title      AS title,
-                   s.started_at AS started_at,
-                   s.summary    AS summary,
-                   v.distance  AS distance
-            FROM vec_messages v
-            JOIN messages m ON m.id = v.rowid
-            JOIN sessions s ON s.id = m.session_id
-            WHERE v.embedding MATCH ? AND k = ?
-              AND NOT s.is_review_agent
-            ORDER BY v.distance
-            """,
-            (blob, limit),
-        ).fetchall()
-        summary_rows = self.conn.execute(
-            """
-            SELECT s.id        AS session_id,
-                   NULL        AS message_id,
-                   s.agent     AS agent,
-                   s.cwd       AS cwd,
-                   s.title      AS title,
-                   s.started_at AS started_at,
-                   s.summary   AS summary,
-                   v.distance  AS distance
-            FROM vec_sessions v
-            JOIN sessions s ON s.rowid = v.rowid
-            WHERE v.embedding MATCH ? AND k = ?
-              AND NOT s.is_review_agent
-            ORDER BY v.distance
-            """,
-            (blob, limit),
-        ).fetchall()
-        return _merge_by_score(message_rows, summary_rows, "distance")[:limit]
+    def search_vector(
+        self,
+        query_embedding: list[float],
+        limit: int = 20,
+        *,
+        agent: str | None = None,
+        entity: str | None = None,
+    ) -> list[dict]:
+        """Find nearest message and summary embeddings within the session filters."""
+        return search_store.search_vector(
+            self.conn, query_embedding, limit, agent=agent, entity=entity
+        )
 
     def search_hybrid(
-        self, query: str, query_embedding: list[float], limit: int = 20
+        self,
+        query: str,
+        query_embedding: list[float],
+        limit: int = 20,
+        *,
+        agent: str | None = None,
+        entity: str | None = None,
     ) -> list[dict]:
         """Reciprocal rank fusion of text and vector results at message level.
 
@@ -406,8 +330,8 @@ class Store:
         independently and both surface in the results.  Text results carry a
         matched snippet; vector-only hits contribute score but no snippet.
         """
-        text_results = self.search_text(query, limit=limit)
-        vec_results = self.search_vector(query_embedding, limit=limit)
+        text_results = self.search_text(query, limit=limit, agent=agent, entity=entity)
+        vec_results = self.search_vector(query_embedding, limit=limit, agent=agent, entity=entity)
         # Accumulate RRF scores per candidate and keep the row with a snippet
         # when the same message appears in both lists.
         scores: dict[tuple[str, object], float] = {}
@@ -438,11 +362,30 @@ class Store:
         ]
 
     def list_sessions(
-        self, limit: int = 50, offset: int = 0, *, include_review_agents: bool = False
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        include_review_agents: bool = False,
+        agent: str | None = None,
+        cwd: str | None = None,
     ) -> list[dict]:
         """Return sessions ordered by started_at descending with pagination."""
         return session_store.list_sessions(
-            self.conn, limit, offset, include_review_agents=include_review_agents
+            self.conn,
+            limit,
+            offset,
+            include_review_agents=include_review_agents,
+            agent=agent,
+            cwd=cwd,
+        )
+
+    def count_sessions(
+        self, *, include_review_agents: bool = False, agent: str | None = None
+    ) -> int:
+        """Return the number of sessions matching the feed filters."""
+        return session_store.count_sessions(
+            self.conn, include_review_agents=include_review_agents, agent=agent
         )
 
     def list_review_sessions(self, parent_thread_ids: list[str]) -> dict[str, list[dict]]:

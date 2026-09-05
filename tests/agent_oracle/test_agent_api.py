@@ -282,19 +282,17 @@ def test_live_agent_follow_up_does_not_require_archive_lookup() -> None:
     store.get_session.assert_not_called()
 
 
-def test_resume_candidates_read_past_the_first_page() -> None:
-    """All archived pages are inspected instead of silently truncating at 200."""
+def test_resume_candidates_query_all_eligible_sessions() -> None:
+    """The database selects eligible sessions without scanning unrelated pages."""
     store = MagicMock()
-    first_page = [{"id": str(index), "agent": "claude", "cwd": "/tmp"} for index in range(200)]
-    second_page = [{"id": "keep", "agent": "codex", "cwd": _agent_repo_root()}]
-    store.list_sessions.side_effect = [first_page, second_page]
+    store.list_sessions.return_value = [{"id": "keep", "agent": "codex", "cwd": _agent_repo_root()}]
     app = create_app(store, MagicMock(), agent_manager=MagicMock())
 
     response = TestClient(app).get("/api/agent/sessions")
 
     assert response.status_code == 200
     assert [session["id"] for session in response.json()["sessions"]] == ["keep"]
-    assert store.list_sessions.call_args_list[1].kwargs == {"limit": 200, "offset": 200}
+    store.list_sessions.assert_called_once_with(limit=-1, agent="codex", cwd=_agent_repo_root())
 
 
 def test_sse_disconnect_leaves_agent_turn_running() -> None:
@@ -338,8 +336,6 @@ def test_agent_resume_candidates_only_include_active_codex_in_this_repository(
     store = MagicMock()
     store.list_sessions.return_value = [
         {"id": "keep", "agent": "codex", "cwd": _agent_repo_root()},
-        {"id": "other-agent", "agent": "claude", "cwd": _agent_repo_root()},
-        {"id": "other-repo", "agent": "codex", "cwd": "/tmp/other"},
         {"id": "archived", "agent": "codex", "cwd": _agent_repo_root()},
     ]
     monkeypatch.setattr("agent_oracle.api.archived_codex_session_ids", lambda _: {"archived"})

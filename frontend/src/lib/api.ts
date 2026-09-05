@@ -205,8 +205,8 @@ export function getTokenUsageStats(
  * @param path - API path relative to the base URL.
  * @returns The parsed JSON response body.
  */
-async function get<T>(path: string): Promise<T> {
-	const response = await fetch(`${API_BASE_URL}${path}`);
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+	const response = await fetch(`${API_BASE_URL}${path}`, { signal });
 	if (!response.ok) {
 		throw await responseError(response);
 	}
@@ -315,11 +315,14 @@ export function getHealth(): Promise<{ status: string }> {
 export function getSessions(
 	limit = 50,
 	offset = 0,
-	includeReviewAgents = false
+	includeReviewAgents = false,
+	agent?: string,
+	signal?: AbortSignal
 ): Promise<SessionList> {
 	const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
 	if (includeReviewAgents) params.set('include_review_agents', 'true');
-	return get(`/api/sessions?${params.toString()}`);
+	if (agent) params.set('agent', agent);
+	return get(`/api/sessions?${params.toString()}`, signal);
 }
 
 /** Fetch OMP-compatible behavior statistics for an optional archive scope. */
@@ -369,8 +372,13 @@ export interface SearchResponse {
  * @param results - The search results to summarize.
  * @returns The AI summary text, or empty string if unavailable.
  */
-export async function fetchSearchSummary(query: string, results: SearchResult[]): Promise<string> {
+export async function fetchSearchSummary(
+	query: string,
+	results: SearchResult[],
+	signal?: AbortSignal
+): Promise<string> {
 	const response = await fetch(`${API_BASE_URL}/api/search/summary`, {
+		signal,
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ query, results })
@@ -395,12 +403,13 @@ export function search(
 	mode: SearchMode = 'hybrid',
 	limit = 20,
 	agent?: string,
-	entity?: string
+	entity?: string,
+	signal?: AbortSignal
 ): Promise<SearchResponse> {
 	const params = new URLSearchParams({ q, mode, limit: String(limit) });
 	if (agent) params.set('agent', agent);
 	if (entity) params.set('entity', entity);
-	return get(`/api/search?${params.toString()}`);
+	return get(`/api/search?${params.toString()}`, signal);
 }
 
 /**

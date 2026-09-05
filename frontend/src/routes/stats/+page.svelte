@@ -372,6 +372,7 @@
 <style>
 	.overview {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: var(--s5);
 	}
 	.heading,
@@ -580,6 +581,7 @@
 	}
 	.tables section {
 		flex: 1 1 350px;
+		min-width: 0;
 	}
 	.tables .wide {
 		flex-basis: 100%;

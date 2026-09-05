@@ -493,8 +493,7 @@
 			placeholder={running ? 'Codex is working…' : 'Ask a follow-up question…'}
 			bind:value={message}
 			disabled={running || submitting}
-			rows="2"
-		></textarea>
+			rows="2"></textarea>
 		<button type="submit" disabled={running || submitting || imageReading || !message.trim()}
 			>{submitting ? 'Sending…' : 'Send'}</button
 		>

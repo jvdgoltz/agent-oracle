@@ -93,6 +93,7 @@ def _register_routes(app: FastAPI) -> None:
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
         include_review_agents: bool = Query(default=False),
+        agent: str | None = Query(default=None),
     ) -> dict[str, Any]:
         """Return the most recent sessions with pagination metadata."""
         store = request.app.state.store
@@ -100,13 +101,17 @@ def _register_routes(app: FastAPI) -> None:
             limit=limit,
             offset=offset,
             include_review_agents=include_review_agents,
+            agent=agent,
         )
         entities = store.list_entities([s["id"] for s in sessions])
         reviews = store.list_review_sessions([s["id"] for s in sessions])
         for session in sessions:
             session["entities"] = _normalize_entities(entities.get(session["id"], []))
             session["review_sessions"] = reviews.get(session["id"], [])
-        return {"sessions": sessions, "total": len(sessions)}
+        return {
+            "sessions": sessions,
+            "total": store.count_sessions(include_review_agents=include_review_agents, agent=agent),
+        }
 
     @app.get("/api/sessions/{session_id}")
     def get_session(request: Request, session_id: str) -> dict[str, Any]:
@@ -135,8 +140,7 @@ def _register_routes(app: FastAPI) -> None:
         """
         store = request.app.state.store
         embedder = request.app.state.embedder
-        raw_results = _run_search(store, embedder, q, mode, limit)
-        raw_results = _filter_results(store, raw_results, agent=agent, entity=entity)
+        raw_results = _run_search(store, embedder, q, mode, limit, agent=agent, entity=entity)
         grouped = _group_by_session(raw_results)
         entities = store.list_entities([r["session_id"] for r in grouped])
         payloads = [
@@ -380,76 +384,36 @@ def _validate_agent_session(store: Store, thread_id: str) -> None:
 
 
 def _resumable_sessions(store: Store) -> list[dict[str, Any]]:
-    """Read every paginated archive row and keep eligible Codex sessions."""
-    candidates: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = store.list_sessions(limit=200, offset=offset)
-        candidates.extend(
-            session
-            for session in page
-            if session.get("agent") == "codex" and session.get("cwd") == _agent_repo_root()
-        )
-        if len(page) < 200:
-            archived_ids = archived_codex_session_ids({session["id"] for session in candidates})
-            return [session for session in candidates if session["id"] not in archived_ids]
-        offset += len(page)
+    """Read eligible Codex rows and exclude threads archived in Codex."""
+    candidates = store.list_sessions(limit=-1, agent="codex", cwd=_agent_repo_root())
+    archived_ids = archived_codex_session_ids({session["id"] for session in candidates})
+    return [session for session in candidates if session["id"] not in archived_ids]
 
 
 def _run_search(
-    store: Store, embedder: Embedder, query: str, mode: str, limit: int
+    store: Store,
+    embedder: Embedder,
+    query: str,
+    mode: str,
+    limit: int,
+    *,
+    agent: str | None = None,
+    entity: str | None = None,
 ) -> list[SearchResult]:
     """Run the store search for *mode*, embedding the query when required."""
     if mode == "text":
-        return store.search_text(query, limit=limit)
+        return store.search_text(query, limit=limit, agent=agent, entity=entity)
     query_embedding = embedder.embed_query(query)
     if mode == "vector":
-        return store.search_vector(query_embedding, limit=limit)
+        return store.search_vector(query_embedding, limit=limit, agent=agent, entity=entity)
     if mode == "hybrid":
-        return store.search_hybrid(query, query_embedding, limit=limit)
+        return store.search_hybrid(query, query_embedding, limit=limit, agent=agent, entity=entity)
     logger.warning("Unknown search mode %r, falling back to text", mode)
-    return store.search_text(query, limit=limit)
-
-
-def _filter_results(
-    store: Store,
-    results: list[SearchResult],
-    *,
-    agent: str | None,
-    entity: str | None,
-) -> list[SearchResult]:
-    """Drop results whose session does not match the agent or entity filters."""
-    if not agent and not entity:
-        return results
-    filtered: list[SearchResult] = []
-    for result in results:
-        session_id = result["session_id"]
-        if agent is not None and _session_agent(store, session_id) != agent:
-            continue
-        if entity is not None and not _has_entity(store, session_id, entity):
-            continue
-        filtered.append(result)
-    return filtered
-
-
-def _session_agent(store: Store, session_id: str) -> str | None:
-    """Return the agent type for *session_id*, or None if the session is missing."""
-    session = store.get_session(session_id)
-    return session.get("agent") if session else None
-
-
-def _has_entity(store: Store, session_id: str, entity: str) -> bool:
-    """Return True if any entity value for *session_id* equals *entity*."""
-    return any(entry.get("entity_value") == entity for entry in store.get_entities(session_id))
+    return store.search_text(query, limit=limit, agent=agent, entity=entity)
 
 
 def _group_by_session(results: list[SearchResult]) -> list[SearchResult]:
-    """Merge results that share a session_id, collecting all message snippets.
-
-    The store returns one row per matching message, so the same session can
-    appear multiple times.  This groups them, keeping the best score and
-    collecting all non-empty snippets into ``message_snippets``.
-    """
+    """Group ordered search hits, preserving the first (best) hit per session."""
     best: dict[str, SearchResult] = {}
     snippets: dict[str, list[str]] = {}
     for result in results:
@@ -457,18 +421,7 @@ def _group_by_session(results: list[SearchResult]) -> list[SearchResult]:
         snippet = result.get("snippet", "")
         if snippet:
             snippets.setdefault(sid, []).append(snippet)
-        if sid not in best:
-            best[sid] = result
-        else:
-            score = result.get("score", result.get("rank", result.get("distance")))
-            prev = best[sid]
-            prev_score = prev.get("score", prev.get("rank", prev.get("distance")))
-            if (
-                isinstance(score, (int, float))
-                and isinstance(prev_score, (int, float))
-                and score > prev_score
-            ):
-                best[sid] = result
+        best.setdefault(sid, result)
     return [{**r, "message_snippets": snippets.get(r["session_id"], [])} for r in best.values()]
 
 

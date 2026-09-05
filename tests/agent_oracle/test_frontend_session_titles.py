@@ -1,5 +1,6 @@
 """Tests for frontend session-title rendering contracts."""
 
+import re
 from pathlib import Path
 
 FRONTEND = Path(__file__).parents[2] / "frontend" / "src"
@@ -18,4 +19,4 @@ def test_overview_and_detail_render_session_titles() -> None:
     detail = (FRONTEND / "routes" / "sessions" / "[id]" / "+page.svelte").read_text()
 
     assert '<h3 class="card-title">{session.title}</h3>' in overview
-    assert '<h1 class="session-title">{session.title}</h1>' in detail
+    assert re.search(r'<h1\b[^>]*\bclass="session-title"[^>]*>\s*\{session.title\}\s*</h1>', detail)

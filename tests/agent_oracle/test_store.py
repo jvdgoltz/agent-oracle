@@ -7,6 +7,7 @@ summaries, and text / vector / hybrid search.
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -78,6 +79,29 @@ def test_init_creates_tables(store: Store) -> None:
     assert "vec_sessions" in names
     assert "vec_messages" in names
     assert "entities" in names
+
+
+def test_concurrent_session_reads_keep_results_isolated(store: Store) -> None:
+    """Concurrent feed and resume queries retain their own rows and parameters."""
+    store.conn.executemany(
+        "INSERT INTO sessions (id, agent, cwd, started_at) VALUES (?, ?, ?, ?)",
+        [(str(index), "codex", "/tmp/project", f"{index:03}") for index in range(80)],
+    )
+    store.conn.commit()
+    expected = [str(index) for index in reversed(range(80))]
+
+    def read_sessions(index: int) -> None:
+        """Check the complete ordered result of one concurrent request."""
+        resume = bool(index % 2)
+        rows = store.list_sessions(
+            limit=-1 if resume else 50,
+            agent="codex" if resume else None,
+            cwd="/tmp/project" if resume else None,
+        )
+        assert [row["id"] for row in rows] == (expected if resume else expected[:50])
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(read_sessions, range(512)))
 
 
 def test_init_creates_indexes(store: Store) -> None:
@@ -239,93 +263,6 @@ def test_upsert_entities_replaces_existing(store: Store) -> None:
     entities = store.get_entities("sess-001")
     assert len(entities) == 1
     assert entities[0]["entity_value"] == "new.py"
-
-
-# search_text
-
-
-def test_search_text_returns_matching_sessions(store: Store) -> None:
-    """FTS5 search returns session_id, snippet, and rank for matches."""
-    store.index_session(
-        _make_session(
-            session_id="s1",
-            messages=[_make_message("hello world from codex")],
-        )
-    )
-    store.index_session(
-        _make_session(
-            session_id="s2",
-            messages=[_make_message("goodbye world")],
-        )
-    )
-
-    s1 = store.get_session("s1")
-    assert s1 is not None
-
-    results = store.search_text("hello", limit=10)
-    assert len(results) == 1
-    assert results[0]["session_id"] == "s1"
-    assert results[0]["message_id"] == s1["messages"][0]["id"]
-    assert "hello" in results[0]["snippet"]
-    assert isinstance(results[0]["rank"], float)
-
-
-def test_search_text_no_results(store: Store) -> None:
-    """A query matching nothing returns an empty list."""
-    store.index_session(_make_session(messages=[_make_message("hello world")]))
-    results = store.search_text("nonexistent", limit=10)
-    assert results == []
-
-
-def test_merge_by_score_drops_null_rank_rows() -> None:
-    """Rows with a NULL score are dropped instead of crashing the sort."""
-    from agent_oracle.store import _merge_by_score
-
-    def row(rank, snippet="x"):
-        return {"rank": rank, "snippet": snippet}
-
-    message_rows = [row(None, "unscoreable"), row(-0.5, "good")]
-    summary_rows = [row(None, "unscoreable-summary")]
-    merged = _merge_by_score(message_rows, summary_rows, "rank")
-    assert [r["rank"] for r in merged] == [-0.5]
-
-
-# search_vector
-
-
-def test_search_vector_returns_nearest(store: Store) -> None:
-    """Vector search returns the session with the nearest embedding first."""
-    store.index_session(
-        _make_session(
-            session_id="s1",
-            messages=[_make_message("first message")],
-        )
-    )
-    store.index_session(
-        _make_session(
-            session_id="s2",
-            messages=[_make_message("second message")],
-        )
-    )
-
-    s1 = store.get_session("s1")
-    s2 = store.get_session("s2")
-    assert s1 is not None and s2 is not None
-
-    store.upsert_embedding(s1["messages"][0]["id"], _make_embedding(1.0, index=0))
-    store.upsert_embedding(s2["messages"][0]["id"], _make_embedding(1.0, index=1))
-
-    results = store.search_vector(_make_embedding(1.0, index=0), limit=5)
-    assert len(results) == 2
-    assert results[0]["session_id"] == "s1"
-    assert results[0]["message_id"] == s1["messages"][0]["id"]
-    assert results[0]["distance"] == pytest.approx(0.0, abs=1e-5)
-
-
-def test_search_vector_no_results(store: Store) -> None:
-    """Vector search on an empty index returns an empty list."""
-    results = store.search_vector(_make_embedding(1.0), limit=5)
-    assert results == []
 
 
 # search_hybrid

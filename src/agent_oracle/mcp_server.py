@@ -45,7 +45,7 @@ def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:
             results = store.search_vector(embedding, limit=limit)
         else:
             raise ValueError(f"unknown search mode: {mode!r}")
-        return [_enrich(result, store) for result in results]
+        return [_search_payload(result) for result in results]
 
     @mcp.tool
     def get_session(session_id: str) -> dict | None:
@@ -74,14 +74,13 @@ def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:
     return mcp
 
 
-def _enrich(result: dict, store: Store) -> dict:
-    """Merge search *result* with its session metadata into a tool response."""
-    session = store.get_session(result["session_id"]) or {}
-    snippet = result.get("snippet") or session.get("summary")
+def _search_payload(result: dict) -> dict:
+    """Project a search row into a tool response without loading its transcript."""
+    snippet = result.get("snippet") or result.get("summary")
     score = result.get("score", result.get("rank", result.get("distance")))
     return {
         "session_id": result["session_id"],
         "snippet": snippet,
         "score": score,
-        **{field: session.get(field) for field in _SESSION_FIELDS},
+        **{field: result.get(field) for field in _SESSION_FIELDS},
     }

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import cast
+from unittest.mock import MagicMock
+
+import pytest
 
 from agent_oracle.embed import Embedder
 from agent_oracle.mcp_server import create_mcp_server
@@ -48,17 +51,17 @@ class _FakeStore:
 
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """Return a fake text search result for *query*."""
-        return [{"session_id": "s1", "snippet": "text match", "rank": -1.0}]
+        return [{**SESSION, "session_id": "s1", "snippet": "text match", "rank": -1.0}]
 
     def search_vector(self, query_embedding: list[float], limit: int = 20) -> list[dict]:
         """Return a fake vector search result for *query_embedding*."""
-        return [{"session_id": "s1", "distance": 0.1}]
+        return [{**SESSION, "session_id": "s1", "distance": 0.1}]
 
     def search_hybrid(
         self, query: str, query_embedding: list[float], limit: int = 20
     ) -> list[dict]:
         """Return a fake hybrid search result for *query*."""
-        return [{"session_id": "s1", "score": 0.5}]
+        return [{**SESSION, "session_id": "s1", "score": 0.5}]
 
     def get_session(self, session_id: str) -> dict | None:
         """Return the fake session when it is known, else None."""
@@ -211,3 +214,17 @@ def test_list_recent_sessions_excludes_review_agents() -> None:
     _call(server, "list_recent_sessions", {"limit": 10, "offset": 3})
 
     assert store.recent_args == (10, 3, False)
+
+
+@pytest.mark.parametrize("mode", ["text", "vector", "hybrid"])
+def test_search_uses_row_metadata_without_loading_transcripts(mode: str) -> None:
+    """MCP search reads metadata already returned with each candidate."""
+    store = MagicMock()
+    getattr(store, f"search_{mode}").return_value = [
+        {**SESSION, "session_id": "s1", "distance": 0.1}
+    ]
+    server = create_mcp_server(store, cast(Embedder, _FakeEmbedder()))
+    results = _call(server, "search_sessions", {"query": "flaky", "mode": mode})
+    assert results[0]["title"] == SESSION["title"]
+    assert results[0]["snippet"] == SESSION["summary"]
+    store.get_session.assert_not_called()

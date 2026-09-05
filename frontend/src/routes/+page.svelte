@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { createBrowserState, createSessionBrowser } from '$lib/session-browser';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import AgentBadge from '$lib/AgentBadge.svelte';
@@ -9,13 +11,9 @@
 		fetchSearchSummary,
 		startAgentSession,
 		type SearchMode,
-		type SearchResult,
 		type SessionSummary
 	} from '$lib/api';
 	import { relativeTime } from '$lib/format';
-
-	/** Max sessions loaded for the recent feed. */
-	const FEED_LIMIT = 50;
 
 	/** Ordered list of search modes offered by the backend. */
 	const MODES: { value: SearchMode; label: string }[] = [
@@ -34,17 +32,8 @@
 		{ value: 'pi', label: 'Pi' }
 	];
 
-	let sessions: SessionSummary[] = $state([]);
-	let loading = $state(true);
-
-	let query = $state('');
-	let mode: SearchMode = $state('hybrid');
-	let agent = $state('');
-	let searching = $state(false);
-	let results: SearchResult[] = $state([]);
-	let aiSummary = $state('');
-	let summaryLoading = $state(false);
-	let error = $state<string | null>(null);
+	const archive = $state(createBrowserState());
+	const browser = createSessionBrowser(archive, { getSessions, search, fetchSearchSummary });
 
 	let agentMessage = $state('');
 	let resumeCandidates: SessionSummary[] = $state([]);
@@ -86,82 +75,34 @@
 		}
 	}
 
-	/**
-	 * Load the recent session feed, optionally filtered by agent.
-	 */
-	async function loadFeed() {
-		loading = true;
-		error = null;
-		try {
-			const agentParam = agent || undefined;
-			const data = await getSessions(FEED_LIMIT);
-			sessions = agentParam
-				? data.sessions.filter((s) => s.agent.toLowerCase().includes(agentParam))
-				: data.sessions;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load sessions';
-		} finally {
-			loading = false;
-		}
-	}
-
-	/**
-	 * Trigger a search across sessions using the current query and mode.
-	 * Results are shown immediately; the AI summary is fetched separately.
-	 */
-	async function runSearch() {
-		if (!query.trim()) {
-			searching = false;
-			results = [];
-			aiSummary = '';
-			summaryLoading = false;
-			return;
-		}
-		searching = true;
-		error = null;
-		aiSummary = '';
-		summaryLoading = false;
-		try {
-			const data = await search(query.trim(), mode, 20, agent || undefined);
-			results = data.results;
-			// Fetch AI summary separately so results render immediately.
-			if (results.length > 0) {
-				summaryLoading = true;
-				fetchSearchSummary(query.trim(), results)
-					.then((summary) => {
-						aiSummary = summary;
-					})
-					.catch(() => {
-						aiSummary = '';
-					})
-					.finally(() => {
-						summaryLoading = false;
-					});
-			}
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Search failed';
-			results = [];
-			aiSummary = '';
-		} finally {
-			searching = false;
-		}
-	}
-
-	$effect(() => {
-		loadFeed();
-	});
-
-	$effect(() => {
-		loadResumeCandidates();
-	});
-
-	// Reload the feed whenever the agent filter changes while not searching.
-	$effect(() => {
-		if (!searching) {
-			loadFeed();
-		}
+	onMount(() => {
+		void browser.loadFeed();
+		void loadResumeCandidates();
+		return browser.cancel;
 	});
 </script>
+
+{#snippet pagination()}
+	<nav class="pagination" aria-label="Session pages">
+		<span class="muted"
+			>{archive.offset + 1}–{archive.offset + archive.sessions.length} of {archive.total.toLocaleString()}</span
+		>
+		{#if archive.total > browser.pageSize}
+			<button
+				type="button"
+				aria-label="Previous session page"
+				disabled={archive.offset === 0 || archive.loading}
+				onclick={() => browser.changePage(-1)}>←</button
+			>
+			<button
+				type="button"
+				aria-label="Next session page"
+				disabled={archive.offset + browser.pageSize >= archive.total || archive.loading}
+				onclick={() => browser.changePage(1)}>→</button
+			>
+		{/if}
+	</nav>
+{/snippet}
 
 <div class="home">
 	<!-- ── Search bar ─────────────────────────────────────────────── -->
@@ -169,7 +110,7 @@
 		class="search-form"
 		onsubmit={(e: SubmitEvent) => {
 			e.preventDefault();
-			runSearch();
+			browser.runSearch();
 		}}
 	>
 		<div class="search-bar">
@@ -177,18 +118,19 @@
 			<input
 				class="search-input"
 				type="search"
+				aria-label="Search agent sessions"
+				oninput={(event) => {
+					if (!event.currentTarget.value) void browser.clearSearch();
+				}}
 				placeholder="Search agent sessions…"
-				bind:value={query}
+				bind:value={archive.query}
 			/>
-			{#if query}
+			{#if archive.query || archive.submittedQuery}
 				<button
 					class="clear-btn"
 					type="button"
 					aria-label="Clear search"
-					onclick={() => {
-						query = '';
-						results = [];
-					}}>✕</button
+					onclick={browser.clearSearch}>✕</button
 				>
 			{/if}
 		</div>
@@ -200,8 +142,9 @@
 				{#each MODES as m (m.value)}
 					<button
 						type="button"
-						class="pill {mode === m.value ? 'active' : ''}"
-						onclick={() => (mode = m.value)}
+						class="pill {archive.mode === m.value ? 'active' : ''}"
+						onclick={() => browser.changeMode(m.value)}
+						aria-pressed={archive.mode === m.value}
 					>
 						{m.label}
 					</button>
@@ -213,42 +156,41 @@
 				{#each AGENTS as a (a.value)}
 					<button
 						type="button"
-						class="pill {agent === a.value ? 'active' : ''}"
-						onclick={() => (agent = a.value)}
+						class="pill {archive.agent === a.value ? 'active' : ''}"
+						onclick={() => browser.changeAgent(a.value)}
+						aria-pressed={archive.agent === a.value}
 					>
 						{a.label}
 					</button>
 				{/each}
 			</div>
 
-			{#if query.trim()}
+			{#if archive.query.trim()}
 				<button class="search-btn" type="submit">Search</button>
 			{/if}
 		</div>
 	</form>
 
-	<!-- ── Feedback ──────────────────────────────────────────────── -->
-	{#if error}
-		<p class="error">{error}</p>
-	{/if}
-
 	<!-- ── Search results ────────────────────────────────────────── -->
-	{#if searching}
-		<div class="feed-header"><span class="muted">Searching…</span></div>
-	{:else if query.trim()}
+	{#if archive.searching}
+		<div class="feed-header" role="status"><span class="muted">Searching…</span></div>
+	{:else if archive.error}
+		<p class="error" role="alert">{archive.error}</p>
+	{:else if archive.submittedQuery}
 		<div class="feed-header">
 			<h2 class="section-title">
-				{results.length} result{results.length !== 1 ? 's' : ''} for <em>"{query.trim()}"</em>
+				{archive.results.length} result{archive.results.length !== 1 ? 's' : ''} for
+				<em>"{archive.submittedQuery}"</em>
 			</h2>
 		</div>
-		{#if results.length === 0}
+		{#if archive.results.length === 0}
 			<div class="empty-state">
 				<p class="empty-icon">⊘</p>
 				<p class="empty-title">No results found</p>
 				<p class="empty-sub">Try a different query or switch to a different search mode.</p>
 			</div>
 		{:else}
-			{#if summaryLoading}
+			{#if archive.summaryLoading}
 				<div class="ai-summary ai-summary-loading">
 					<div class="ai-summary-icon">✦</div>
 					<div class="ai-summary-placeholder">
@@ -256,14 +198,14 @@
 						<span class="shimmer-line short"></span>
 					</div>
 				</div>
-			{:else if aiSummary}
+			{:else if archive.aiSummary}
 				<div class="ai-summary">
 					<div class="ai-summary-icon">✦</div>
-					<p class="ai-summary-text">{aiSummary}</p>
+					<p class="ai-summary-text">{archive.aiSummary}</p>
 				</div>
 			{/if}
 			<ul class="card-list">
-				{#each results as result, i (result.session_id + i)}
+				{#each archive.results as result, i (result.session_id + i)}
 					<li>
 						<a class="card" href={resolve(`/sessions/${result.session_id}`)}>
 							<div class="card-row">
@@ -309,23 +251,27 @@
 		{/if}
 
 		<!-- ── Recent feed ───────────────────────────────────────────── -->
-	{:else if loading}
-		<div class="feed-header"><span class="muted">Loading…</span></div>
-	{:else if sessions.length === 0}
+	{:else if archive.loading}
+		<div class="feed-header" role="status"><span class="muted">Loading sessions…</span></div>
+	{:else if archive.sessions.length === 0}
 		<div class="empty-state">
 			<p class="empty-icon">◈</p>
-			<p class="empty-title">No sessions indexed yet</p>
+			<p class="empty-title">
+				{archive.agent ? 'No sessions for this agent' : 'No sessions indexed yet'}
+			</p>
 			<p class="empty-sub">
-				Start the watcher with <code>uv run agent-oracle</code> and open a Codex, Factory, or Claude session.
+				{archive.agent
+					? 'Choose another agent or All to browse the archive.'
+					: 'Archived coding sessions will appear here once the watcher imports them.'}
 			</p>
 		</div>
 	{:else}
 		<div class="feed-header">
 			<h2 class="section-title">Recent sessions</h2>
-			<span class="muted">{sessions.length} session{sessions.length !== 1 ? 's' : ''}</span>
+			{@render pagination()}
 		</div>
 		<ul class="card-list">
-			{#each sessions as session (session.id)}
+			{#each archive.sessions as session (session.id)}
 				<li>
 					<a class="card" href={resolve(`/sessions/${session.id}`)}>
 						<div class="card-row">
@@ -360,6 +306,9 @@
 				</li>
 			{/each}
 		</ul>
+		{#if archive.total > browser.pageSize}
+			<div class="feed-footer">{@render pagination()}</div>
+		{/if}
 	{/if}
 
 	<!-- ── Codex launcher ─────────────────────────────────────────── -->
@@ -379,11 +328,11 @@
 		>
 			<textarea
 				class="agent-message"
+				aria-label="Task for Codex"
 				bind:value={agentMessage}
 				placeholder="What should Codex work on?"
 				rows="3"
-				disabled={agentSubmitting}
-			></textarea>
+				disabled={agentSubmitting}></textarea>
 			<label class="resume-label" for="resume-session"
 				>Resume candidates: Codex sessions in this repository.</label
 			>
@@ -403,7 +352,7 @@
 			<div class="agent-launcher-actions">
 				{#if agentAvailabilityLoading}
 					<span class="muted">Loading resume candidates…</span>
-				{:else if resumeCandidates.length === 0}
+				{:else if !agentError && resumeCandidates.length === 0}
 					<span class="muted">No archived Codex sessions are available to resume.</span>
 				{/if}
 				<button class="agent-start-btn" type="submit" disabled={agentSubmitting}>
@@ -455,6 +404,7 @@
 	}
 
 	.search-input {
+		min-width: 0;
 		flex: 1;
 		background: none;
 		border: none;
@@ -499,6 +449,7 @@
 	}
 
 	.filter-group {
+		flex-wrap: wrap;
 		display: flex;
 		align-items: center;
 		gap: var(--s1);
@@ -567,6 +518,8 @@
 
 	/* ── Feed header ─────────────────────────────────────────────── */
 	.feed-header {
+		flex-wrap: wrap;
+		justify-content: space-between;
 		display: flex;
 		align-items: baseline;
 		gap: var(--s3);
@@ -603,6 +556,7 @@
 	}
 
 	.card {
+		overflow-wrap: anywhere;
 		display: flex;
 		flex-direction: column;
 		gap: var(--s2);
@@ -637,7 +591,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		max-width: 380px;
+		max-width: min(380px, 100%);
 	}
 
 	.ml-auto {
@@ -651,6 +605,8 @@
 	}
 
 	.entity-tag {
+		max-width: 100%;
+		overflow-wrap: anywhere;
 		display: inline-flex;
 		align-items: center;
 		gap: var(--s1);
@@ -800,7 +756,7 @@
 		line-height: 1.4;
 	}
 
-	/* ── Empty state ─────────────────────────────────────────────── */
+	/* ── Empty archive ─────────────────────────────────────────────── */
 	.empty-state {
 		padding: var(--s8) var(--s5);
 		text-align: center;
@@ -927,5 +883,55 @@
 
 	.agent-error {
 		margin: 0;
+	}
+
+	.pagination {
+		display: flex;
+		align-items: center;
+		gap: var(--s2);
+	}
+	.pagination button {
+		width: 30px;
+		height: 30px;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--r2);
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
+	}
+	.pagination button:hover:not(:disabled) {
+		background: var(--hover);
+		border-color: var(--accent);
+	}
+	.pagination button:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+	.feed-footer {
+		display: flex;
+		justify-content: flex-end;
+	}
+	.review-sessions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--s3);
+		padding: var(--s2) var(--s5);
+		background: var(--surface);
+		border-top: 1px solid var(--border);
+		font-size: 12px;
+	}
+	@media (max-width: 480px) {
+		.card,
+		.agent-launcher,
+		.ai-summary {
+			padding: var(--s3);
+		}
+		.card-row {
+			gap: var(--s2);
+		}
+		.agent-launcher-actions {
+			flex-wrap: wrap;
+		}
 	}
 </style>
