@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '$lib/stats.css';
 	import {
 		getOverviewStats,
 		getTokenUsageStats,
@@ -108,7 +109,7 @@
 	});
 </script>
 
-<section class="overview">
+<section class="statistics overview">
 	<div class="heading">
 		<div>
 			<h1>Archive overview</h1>
@@ -370,77 +371,18 @@
 </section>
 
 <style>
-	.overview {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		gap: var(--s5);
-	}
-	.heading,
-	.filters,
-	.cards,
-	.charts,
-	.tables {
-		display: flex;
-		gap: var(--s4);
-	}
-	.heading {
-		align-items: end;
-		justify-content: space-between;
-	}
-	h1,
-	h2,
-	p {
-		margin: 0;
-	}
-	h1 {
-		font-size: 22px;
-	}
 	h2 {
-		font-size: 15px;
-		margin-bottom: var(--s2);
+		margin: 0 0 var(--s2);
+	}
+	p {
+		font-size: 12px;
+		margin: 0 0 var(--s2);
 	}
 	h3 {
 		margin: var(--s4) 0 var(--s2);
 		font-size: 13px;
 	}
-	p,
-	small,
-	.scope {
-		color: var(--muted);
-	}
-	p {
-		font-size: 12px;
-		margin-bottom: var(--s2);
-	}
-	.filters,
-	.tables {
-		flex-wrap: wrap;
-	}
-	label {
-		display: grid;
-		gap: var(--s1);
-		color: var(--muted);
-		font-size: 12px;
-	}
-	select,
-	input {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--r2);
-		color: var(--text);
-		padding: var(--s2);
-	}
-	.cards {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-	}
 	.card {
-		display: grid;
-		gap: var(--s1);
-		padding: var(--s4);
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--r3);
 		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
 	}
 	.card.accent {
@@ -449,59 +391,18 @@
 	}
 	.card strong {
 		font-size: 20px;
-		font-variant-numeric: tabular-nums;
-	}
-	.card small {
-		font-size: 11px;
-	}
-	.charts {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-	.chart-card {
-		min-width: 0;
-		padding: var(--s4);
-		background: linear-gradient(160deg, var(--surface), var(--bg));
-		border: 1px solid var(--border);
-		border-radius: var(--r3);
 	}
 	.wide-chart {
 		grid-column: 1 / -1;
 	}
-	.section-heading {
-		display: flex;
-		align-items: start;
-		justify-content: space-between;
-		gap: var(--s3);
-		margin-bottom: var(--s4);
-	}
-	.section-heading p {
-		margin: 0;
-		font-size: 11px;
-	}
 	.chart-total {
-		color: var(--accent);
-		font-size: 11px;
 		font-variant-numeric: tabular-nums;
-		white-space: nowrap;
-	}
-	.bar-list {
-		display: grid;
-		gap: var(--s3);
-	}
-	.bar-row {
-		display: grid;
-		gap: var(--s1);
 	}
 	.bar-label {
-		display: flex;
 		align-items: center;
-		gap: var(--s2);
-		min-width: 0;
 		font-size: 12px;
 	}
-	.bar-label span:not(.dot),
-	.bar-label code {
+	.bar-label span:not(.dot) {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -521,15 +422,6 @@
 	}
 	.track {
 		height: 7px;
-		overflow: hidden;
-		border-radius: 99px;
-		background: var(--elevated);
-	}
-	.bar {
-		display: block;
-		height: 100%;
-		min-width: 0;
-		border-radius: inherit;
 	}
 	.model-bar {
 		background: linear-gradient(90deg, var(--accent), #a78bfa);
@@ -572,45 +464,15 @@
 		border-radius: var(--r2) var(--r2) 0 0;
 		background: linear-gradient(180deg, var(--accent), #5b6da8);
 	}
-	.empty {
-		padding: var(--s5) 0;
-		text-align: center;
-	}
-	.tables {
-		align-items: start;
-	}
-	.tables section {
-		flex: 1 1 350px;
-		min-width: 0;
-	}
 	.tables .wide {
 		flex-basis: 100%;
 	}
-	table {
-		width: 100%;
-		border-collapse: collapse;
-	}
-	th,
 	td {
-		padding: var(--s2);
-		border-bottom: 1px solid var(--border);
-		text-align: left;
 		font-size: 12px;
 	}
-	th {
-		color: var(--muted);
-		font-weight: 500;
-	}
 	@media (max-width: 640px) {
-		.charts {
-			grid-template-columns: 1fr;
-		}
 		.wide-chart {
 			grid-column: auto;
-		}
-		.heading {
-			align-items: start;
-			flex-direction: column;
 		}
 	}
 </style>
