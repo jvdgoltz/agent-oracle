@@ -91,4 +91,6 @@ respect-type-ignore-comments = true
 
 [tool.uv]
 exclude-newer = "7 days"
+# Security fixes (eMudhra CA incident) bypass the cooldown.
+exclude-newer-package = { certifi = false }
 constraint-dependencies = ["fastmcp-slim==4.0.0b1"]
