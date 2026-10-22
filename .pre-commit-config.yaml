@@ -36,7 +36,7 @@ repos:
       # type_check (+ strict typing where applicable) -> ty
       - id: ty-check
         name: Ty type check
-        entry: uvx ty check
+        entry: uv run --locked ty check
         language: system
         pass_filenames: false
 
