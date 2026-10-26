@@ -99,3 +99,15 @@ def test_model_loaded_lazily_and_cached() -> None:
 def test_default_model_constant_is_bge_small() -> None:
     """The default model name is the BAAI bge-small-en-v1.5."""
     assert DEFAULT_MODEL == "BAAI/bge-small-en-v1.5"
+
+
+def test_inference_batches_are_bounded() -> None:
+    """Long inputs are split before ONNX inference to cap activation memory."""
+    from unittest.mock import MagicMock
+
+    model = MagicMock()
+    model.embed.side_effect = lambda texts, **kwargs: iter(np.zeros((len(texts), _DIM)))
+    embedder = Embedder(_model=model)
+    assert len(embedder.embed_batch(["long input"] * 70)) == 70
+    assert max(len(call.args[0]) for call in model.embed.call_args_list) <= 8
+    assert all(call.kwargs["batch_size"] <= 8 for call in model.embed.call_args_list)

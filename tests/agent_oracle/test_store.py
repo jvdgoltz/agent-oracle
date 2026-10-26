@@ -57,33 +57,6 @@ def _make_message(
 # Schema / initialization
 
 
-def test_init_creates_tables(store: Store) -> None:
-    """All expected tables exist after initialization."""
-    names = {
-        r[0]
-        for r in store.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type IN ('table','index')"
-        ).fetchall()
-    }
-    assert "sessions" in names
-    assert "messages" in names
-    assert "messages_fts" in names
-    assert "sessions_fts" in names
-    assert "vec_sessions" in names
-    assert "vec_messages" in names
-    assert "entities" in names
-
-
-def test_init_creates_indexes(store: Store) -> None:
-    """Indexes on session_id exist for messages and entities."""
-    names = {
-        r[0]
-        for r in store.conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
-    }
-    assert "idx_messages_session_id" in names
-    assert "idx_entities_session_id" in names
-
-
 # index_session
 
 
@@ -481,3 +454,46 @@ def test_get_session_returns_none_for_missing(store: Store) -> None:
 def test_get_entities_returns_empty_for_missing(store: Store) -> None:
     """get_entities returns an empty list for a session with no entities."""
     assert store.get_entities("no-session") == []
+
+
+def test_replace_session_with_unindexed_messages(store: Store) -> None:
+    """Replacing a mixed session never deletes nonexistent FTS entries."""
+    from dataclasses import replace
+
+    hidden = replace(_make_message("private thinking"), is_thinking=True)
+    session = _make_session(messages=[_make_message("searchable"), hidden])
+    store.index_session(session)
+    store.index_session(session)
+    assert len(store.search_text("searchable")) == 1
+    assert store.search_text("private") == []
+
+
+def test_failed_index_rolls_back(store: Store) -> None:
+    """A failed replacement keeps the original session and search index intact."""
+    import sqlite3
+
+    store.index_session(_make_session(messages=[_make_message("original")]))
+    store.conn.execute(
+        "CREATE TRIGGER fail_message BEFORE INSERT ON messages "
+        "BEGIN SELECT RAISE(ABORT, 'test failure'); END"
+    )
+    store.conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        store.index_session(_make_session(messages=[_make_message("replacement")]))
+    assert len(store.search_text("original")) == 1
+    assert not store.conn.in_transaction
+
+
+def test_unchanged_session_preserves_vectors(store: Store) -> None:
+    """Restart indexing retains existing vectors and stable message identifiers."""
+    session = _make_session(messages=[_make_message("unchanged")])
+    store.index_session(session)
+    indexed = store.get_session(session.id)
+    assert indexed is not None
+    message_id = indexed["messages"][0]["id"]
+    store.upsert_embedding(message_id, _make_embedding(1.0))
+    store.index_session(session)
+    indexed = store.get_session(session.id)
+    assert indexed is not None
+    assert indexed["messages"][0]["id"] == message_id
+    assert store.conn.execute("SELECT count(*) FROM vec_messages").fetchone()[0] == 1

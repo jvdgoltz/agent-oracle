@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -78,11 +79,17 @@ class SessionWatcher:
         self.enricher = enricher
         self.debounce_seconds = debounce_seconds
         self._observer = Observer()
-        self._timers: dict[str, threading.Timer] = {}
-        self._lock = threading.Lock()
+        self._pending: dict[Path, float] = {}
+        self._condition = threading.Condition()
+        self._stopped = threading.Event()
+        self._index_lock = threading.Lock()
+        self._worker = threading.Thread(target=self._work, daemon=True, name="session-worker")
 
     def start(self) -> None:
         """Begin watching the session directories with a recursive observer."""
+        if self._stopped.is_set():
+            return
+        self._worker.start()
         for directory in _watched_dirs().values():
             directory.mkdir(parents=True, exist_ok=True)
             self._observer.schedule(_Handler(self), str(directory), recursive=True)
@@ -91,8 +98,15 @@ class SessionWatcher:
 
     def stop(self) -> None:
         """Stop the observer and wait for its threads to exit."""
-        self._observer.stop()
-        self._observer.join()
+        with self._condition:
+            self._stopped.set()
+            self._pending.clear()
+            self._condition.notify_all()
+        if self._observer.is_alive():
+            self._observer.stop()
+            self._observer.join()
+        if self._worker.is_alive():
+            self._worker.join()
         logger.info("Stopped watching session directories")
 
     def index_existing(self) -> None:
@@ -100,7 +114,9 @@ class SessionWatcher:
         for directory in _watched_dirs().values():
             if not directory.exists():
                 continue
-            for path in sorted(directory.rglob("*.jsonl")):
+            for path in directory.rglob("*.jsonl"):
+                if self._stopped.is_set():
+                    return
                 self._index_file(path, skip_if_enriched=True)
 
     def _index_file(self, path: Path, skip_if_enriched: bool = False) -> None:
@@ -116,6 +132,14 @@ class SessionWatcher:
         if parser is None:
             logger.debug("Skipping file outside watched dirs: %s", path)
             return
+        with self._index_lock:
+            if not self._stopped.is_set():
+                self._process_file(path, parser, skip_if_enriched)
+
+    def _process_file(
+        self, path: Path, parser: Callable[[Path], Session], skip_if_enriched: bool
+    ) -> None:
+        """Run one complete indexing job while holding the indexing lock."""
         try:
             session = parser(path)
             if skip_if_enriched and self.store.is_session_indexed(session.id):
@@ -139,13 +163,17 @@ class SessionWatcher:
             m
             for m in all_messages
             if not (m.get("is_thinking") or m.get("is_system_instruction") or m.get("is_injected"))
+            and not m.get("has_embedding")
         ]
         if not searchable:
             return
-        texts = [msg["content"] for msg in searchable]
-        embeddings = self.embedder.embed_batch(texts)
-        for msg, embedding in zip(searchable, embeddings, strict=True):
-            self.store.upsert_embedding(msg["id"], embedding)
+        for start in range(0, len(searchable), 8):
+            if self._stopped.is_set():
+                return
+            batch = searchable[start : start + 8]
+            embeddings = self.embedder.embed_batch([msg["content"] for msg in batch])
+            for msg, embedding in zip(batch, embeddings, strict=True):
+                self.store.upsert_embedding(msg["id"], embedding)
 
     def _enrich_session(self, session: Session) -> None:
         """Enrich the session with the LLM and persist summary and entities."""
@@ -177,12 +205,32 @@ class SessionWatcher:
         self.debounce(Path(src))
 
     def debounce(self, path: Path) -> None:
-        """Cancel any pending re-index for *path* and schedule a new one."""
-        key = str(path)
-        with self._lock:
-            pending = self._timers.get(key)
-            if pending is not None:
-                pending.cancel()
-            timer = threading.Timer(self.debounce_seconds, self._index_file, args=(path,))
-            self._timers[key] = timer
-        timer.start()
+        """Coalesce paths in a bounded queue, applying backpressure when full."""
+        if path.suffix != ".jsonl":
+            return
+        with self._condition:
+            while len(self._pending) >= 1024 and path not in self._pending:
+                if self._stopped.is_set():
+                    return
+                self._condition.wait()
+            if not self._stopped.is_set():
+                self._pending[path] = time.monotonic() + self.debounce_seconds
+                self._condition.notify_all()
+
+    def _work(self) -> None:
+        """Process one ready path at a time, keeping follow-up events coalesced."""
+        while not self._stopped.is_set():
+            with self._condition:
+                if self._stopped.is_set():
+                    return
+                if not self._pending:
+                    self._condition.wait()
+                    continue
+                path = min(self._pending, key=self._pending.__getitem__)
+                delay = self._pending[path] - time.monotonic()
+                if delay > 0:
+                    self._condition.wait(delay)
+                    continue
+                del self._pending[path]
+                self._condition.notify_all()
+            self._index_file(path)

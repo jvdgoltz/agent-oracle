@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from datetime import datetime
+from pathlib import Path
 
 from agent_oracle.models import MessageRole
 
@@ -49,3 +51,9 @@ def parse_jsonl_line(line: str) -> dict | None:
     except json.JSONDecodeError:
         logger.debug("Skipping malformed JSONL line: %s", line[:120])
         return None
+
+
+def iter_lines(path: Path) -> Iterator[str]:
+    """Read source text one line at a time without duplicating the whole file."""
+    with path.open(encoding="utf-8") as source:
+        yield from source

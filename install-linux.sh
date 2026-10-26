@@ -42,7 +42,12 @@ Type=simple
 WorkingDirectory=$PROJECT_DIR
 ExecStart=$UV_BIN run uvicorn agent_oracle.main:app --reload --host 127.0.0.1 --port 8731
 Restart=on-failure
-RestartSec=2
+RestartSec=30
+MemoryAccounting=yes
+MemoryHigh=2G
+MemoryMax=3G
+MemorySwapMax=512M
+OOMPolicy=stop
 
 [Install]
 WantedBy=default.target

@@ -25,3 +25,12 @@ def test_linux_installer_creates_backend_frontend_and_backup_units() -> None:
     assert "agent-oracle-backup.service" in script
     assert "agent-oracle-backup.timer" in script
     assert "OnCalendar=*-*-* 12,18:00:00" in script
+
+
+def test_backend_has_memory_and_swap_limits() -> None:
+    """Backend allocations are contained inside its own service cgroup."""
+    backend = INSTALLER.read_text().split('cat >"$UNIT_DIR/agent-oracle-frontend.service"')[0]
+    assert "MemoryHigh=2G" in backend
+    assert "MemoryMax=3G" in backend
+    assert "MemorySwapMax=512M" in backend
+    assert "OOMPolicy=stop" in backend

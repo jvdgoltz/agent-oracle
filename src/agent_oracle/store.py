@@ -6,19 +6,18 @@ import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 import sqlite_vec
 
 from agent_oracle.behavior_store import list_behavior_messages as query_behavior_messages
+from agent_oracle.database import StoreDatabase, serialized
 from agent_oracle.models import Session
 from agent_oracle.overview_store import list_overview_rows as query_overview_rows
 
 logger = logging.getLogger(__name__)
 
 
-_EMBED_DIM = 384
 _RRF_K = 60
 
 
@@ -54,103 +53,30 @@ def _sanitize_fts_query(query: str) -> str:
     return " ".join(escaped)
 
 
-class Store:
+class Store(StoreDatabase):
     """Persistent SQLite store for sessions, messages, embeddings, and entities."""
 
-    def __init__(self, db_path: Path) -> None:
-        """Open (or create) the database at *db_path* and initialize its schema."""
-        self.db_path = db_path
-        self.conn = self._connect()
-        self._init_schema()
-        logger.info("Store initialized at %s", db_path)
-
-    def _connect(self) -> sqlite3.Connection:
-        """Open the SQLite connection and load the sqlite-vec extension."""
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        return conn
-
-    def _init_schema(self) -> None:
-        """Create all tables, indexes, and virtual tables if they do not exist."""
-        self.conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                id        TEXT PRIMARY KEY,
-                agent     TEXT,
-                cwd       TEXT,
-                title     TEXT,
-                started_at TEXT,
-                summary   TEXT,
-                enriched  INTEGER DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id           TEXT,
-                role                 TEXT,
-                content              TEXT,
-                timestamp            TEXT,
-                seq                  INTEGER,
-                is_thinking          INTEGER DEFAULT 0,
-                model                TEXT,
-                is_system_instruction INTEGER DEFAULT 0,
-                is_injected          INTEGER DEFAULT 0,
-                is_interrupted       INTEGER DEFAULT 0,
-                interruption_model   TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_messages_session_id
-                ON messages(session_id);
-
-            CREATE TABLE IF NOT EXISTS entities (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id   TEXT,
-                entity_type  TEXT,
-                entity_value TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_entities_session_id
-                ON entities(session_id);
-            """
-        )
-        self.conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts "
-            "USING fts5(content, content='messages', content_rowid='id')"
-        )
-        self.conn.execute(
-            f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_messages "
-            f"USING vec0(embedding float[{_EMBED_DIM}])"
-        )
-        self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(summary)")
-        self.conn.execute(
-            f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_sessions "
-            f"USING vec0(embedding float[{_EMBED_DIM}])"
-        )
-        self.conn.commit()
-
+    @serialized
     def index_session(self, session: Session) -> None:
         """Insert or replace *session* and its messages (regular table + FTS5)."""
-        self._delete_session_messages(session.id)
+        unchanged = self._messages_unchanged(session)
+        if not unchanged:
+            self._delete_session_messages(session.id)
         interrupted_messages = session.interruption_models
         self.conn.execute(
-            "INSERT OR REPLACE INTO sessions "
-            "(id, agent, cwd, title, started_at, summary, enriched) "
-            "VALUES (?, ?, ?, ?, ?, "
-            "(SELECT summary FROM sessions WHERE id = ?), "
-            "COALESCE((SELECT enriched FROM sessions WHERE id = ?), 0))",
+            "INSERT INTO sessions (id, agent, cwd, title, started_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET agent=excluded.agent, cwd=excluded.cwd, "
+            "title=excluded.title, started_at=excluded.started_at",
             (
                 session.id,
                 session.agent.value,
                 session.cwd,
                 session.title,
                 session.started_at.isoformat(),
-                session.id,
-                session.id,
             ),
         )
+        if unchanged:
+            return
         for seq, msg in enumerate(session.messages):
             cursor = self.conn.execute(
                 "INSERT INTO messages "
@@ -180,11 +106,36 @@ class Store:
         self.conn.commit()
         logger.debug("Indexed session %s with %d messages", session.id, len(session.messages))
 
+    def _messages_unchanged(self, session: Session) -> bool:
+        """Keep message IDs and embeddings when a restart sees identical source content."""
+        rows = self.conn.execute(
+            "SELECT role,content,timestamp,is_thinking,model,is_system_instruction,is_injected,"
+            "is_interrupted,interruption_model FROM messages WHERE session_id=? ORDER BY seq",
+            (session.id,),
+        ).fetchall()
+        interruptions = session.interruption_models
+        return len(rows) == len(session.messages) and all(
+            tuple(row)
+            == (
+                msg.role.value,
+                msg.content,
+                msg.timestamp.isoformat(),
+                msg.is_thinking,
+                msg.model,
+                msg.is_system_instruction,
+                msg.is_injected,
+                seq in interruptions,
+                interruptions.get(seq),
+            )
+            for seq, (row, msg) in enumerate(zip(rows, session.messages, strict=True))
+        )
+
     def _delete_session_messages(self, session_id: str) -> None:
         """Remove all messages and their FTS and vector index entries for *session_id*."""
         self.conn.execute(
             "DELETE FROM messages_fts WHERE rowid IN "
-            "(SELECT id FROM messages WHERE session_id = ?)",
+            "(SELECT id FROM messages WHERE session_id = ? "
+            "AND NOT is_thinking AND NOT is_system_instruction AND NOT is_injected)",
             (session_id,),
         )
         self.conn.execute(
@@ -194,6 +145,7 @@ class Store:
         )
         self.conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
 
+    @serialized
     def upsert_embedding(self, message_id: int, embedding: list[float]) -> None:
         """Insert (or replace) the *embedding* for message *message_id* into vec_messages."""
         self.conn.execute("DELETE FROM vec_messages WHERE rowid = ?", (message_id,))
@@ -203,6 +155,7 @@ class Store:
         )
         self.conn.commit()
 
+    @serialized
     def upsert_entities(self, session_id: str, entities: list[dict]) -> None:
         """Replace all entities for *session_id* with *entities* and mark it enriched."""
         self.conn.execute("DELETE FROM entities WHERE session_id = ?", (session_id,))
@@ -213,6 +166,7 @@ class Store:
         self.conn.execute("UPDATE sessions SET enriched = 1 WHERE id = ?", (session_id,))
         self.conn.commit()
 
+    @serialized
     def set_summary(self, session_id: str, summary: str) -> None:
         """Set the *summary* text on the session row and index it for FTS."""
         self.conn.execute(
@@ -229,6 +183,7 @@ class Store:
                 )
         self.conn.commit()
 
+    @serialized
     def upsert_session_embedding(self, session_id: str, embedding: list[float]) -> None:
         """Insert (or replace) the *embedding* of the session summary into vec_sessions."""
         rowid = self._session_rowid(session_id)
@@ -247,6 +202,7 @@ class Store:
         row = self.conn.execute("SELECT rowid FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return int(row[0]) if row else None
 
+    @serialized
     def backfill_summary_indexes(
         self, embed_batch: Callable[[list[str]], list[list[float]]]
     ) -> int:
@@ -288,6 +244,7 @@ class Store:
         logger.info("Backfilled summary indexes: %d FTS, %d vectors", len(need_fts), len(need_vec))
         return len(need_fts) + len(need_vec)
 
+    @serialized
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """FTS5 BM25 search over messages and session summaries."""
         fts_query = _sanitize_fts_query(query)
@@ -334,6 +291,7 @@ class Store:
         ).fetchall()
         return _merge_by_score(message_rows, summary_rows, "rank")[:limit]
 
+    @serialized
     def search_vector(self, query_embedding: list[float], limit: int = 20) -> list[dict]:
         """sqlite-vec cosine search over message and summary embeddings."""
         blob = sqlite_vec.serialize_float32(query_embedding)
@@ -374,6 +332,7 @@ class Store:
         ).fetchall()
         return _merge_by_score(message_rows, summary_rows, "distance")[:limit]
 
+    @serialized
     def search_hybrid(
         self, query: str, query_embedding: list[float], limit: int = 20
     ) -> list[dict]:
@@ -415,6 +374,7 @@ class Store:
             for key, score in ranked
         ]
 
+    @serialized
     def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
         """Return sessions ordered by started_at descending with pagination."""
         rows = self.conn.execute(
@@ -428,6 +388,7 @@ class Store:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @serialized
     def list_behavior_messages(
         self,
         *,
@@ -438,12 +399,14 @@ class Store:
         """Return real user messages with session fields for behavior statistics."""
         return query_behavior_messages(self.conn, agent=agent, start=start, end=end)
 
+    @serialized
     def list_overview_rows(
         self, *, agent: str | None = None, start: date | None = None, end: date | None = None
     ) -> dict[str, list[dict]]:
         """Return scoped sessions and visible messages for overview statistics."""
         return query_overview_rows(self.conn, agent=agent, start=start, end=end)
 
+    @serialized
     def is_session_indexed(self, session_id: str) -> bool:
         """Return True if *session_id* exists and has been enriched."""
         row = self.conn.execute(
@@ -451,6 +414,7 @@ class Store:
         ).fetchone()
         return row is not None and bool(row["enriched"])
 
+    @serialized
     def get_session(self, session_id: str) -> dict | None:
         """Return the session and all its messages, or None if not found."""
         row = self.conn.execute(
@@ -463,13 +427,15 @@ class Store:
         result = dict(row)
         msg_rows = self.conn.execute(
             "SELECT id, session_id, role, content, timestamp, seq, "
-            "is_thinking, model, is_system_instruction, is_injected "
+            "is_thinking, model, is_system_instruction, is_injected, "
+            "EXISTS(SELECT 1 FROM vec_messages v WHERE v.rowid=messages.id) AS has_embedding "
             "FROM messages WHERE session_id = ? ORDER BY seq",
             (session_id,),
         ).fetchall()
         result["messages"] = [dict(r) for r in msg_rows]
         return result
 
+    @serialized
     def get_entities(self, session_id: str) -> list[dict]:
         """Return all entities for *session_id*."""
         rows = self.conn.execute(
@@ -478,6 +444,7 @@ class Store:
         ).fetchall()
         return [{"entity_type": r["entity_type"], "entity_value": r["entity_value"]} for r in rows]
 
+    @serialized
     def list_entities(self, session_ids: list[str]) -> dict[str, list[dict]]:
         """Return entities keyed by session_id for all given *session_ids* in one query."""
         if not session_ids:

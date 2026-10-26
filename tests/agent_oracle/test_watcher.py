@@ -343,30 +343,55 @@ def test_index_existing_discovers_all_watched_dirs(tmp_path: Path) -> None:
     assert omp.exists()
 
 
-def test_debounce_cancels_and_reschedules_timer() -> None:
-    """Modify events for the same path cancel the prior timer and reschedule."""
+def test_debounce_serializes_and_coalesces_active_files() -> None:
+    """An active file gets one follow-up pass without concurrent index jobs."""
     watcher, _, _, _ = _make_watcher()
-    watcher.debounce_seconds = 10.0
+    watcher.debounce_seconds = 0.01
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    calls = []
+
+    def index(path: Path) -> None:
+        """Keep the first job active while more events arrive."""
+        calls.append(path)
+        entered.set()
+        assert release.wait(2)
+        if len(calls) == 2:
+            finished.set()
+
     path = _HOME / ".codex" / "sessions" / "rollout-1.jsonl"
+    with (
+        patch.object(watcher, "_index_file", side_effect=index),
+        patch.object(watcher_module, "_watched_dirs", return_value={}),
+    ):
+        watcher.start()
+        try:
+            watcher.debounce(path)
+            assert entered.wait(2)
+            for _ in range(100):
+                watcher.debounce(path)
+            assert len(calls) == 1
+            assert len(watcher._pending) == 1
+            release.set()
+            assert finished.wait(2)
+        finally:
+            release.set()
+            watcher.stop()
+    assert calls == [path, path]
+    assert not watcher._worker.is_alive()
 
-    created: list[MagicMock] = []
-    real_timer = threading.Timer
 
-    def fake_timer(_delay, _fn, args):
-        timer = MagicMock(spec=real_timer)
-        timer.args = args
-        created.append(timer)
-        return timer
-
-    with patch.object(watcher_module.threading, "Timer", side_effect=fake_timer):
-        watcher.debounce(path)
-        watcher.debounce(path)
-
-    assert len(created) == 2
-    created[0].cancel.assert_called_once()
-    created[1].cancel.assert_not_called()
-    created[1].start.assert_called_once()
-    assert watcher._timers[str(path)] is created[1]
+def test_stop_cancels_pending_indexing() -> None:
+    """Shutdown discards delayed work and prevents a later watcher restart."""
+    watcher, _, _, _ = _make_watcher()
+    with patch.object(watcher_module, "_watched_dirs", return_value={}):
+        watcher.start()
+        watcher.debounce(Path("pending.jsonl"))
+        watcher.stop()
+        watcher.start()
+    assert not watcher._pending
+    assert not watcher._worker.is_alive()
 
 
 def test_on_modified_uses_src_path(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ from pathlib import Path
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
+    iter_lines,
     normalize_title,
     parse_jsonl_line,
     parse_timestamp,
@@ -53,7 +54,7 @@ def parse_codex_session(path: Path) -> Session:
     interruptions: list[Interruption] = []
     current_model: str | None = None
 
-    for line in path.read_text().splitlines():
+    for line in iter_lines(path):
         record = parse_jsonl_line(line)
         if record is None:
             continue
@@ -109,7 +110,7 @@ def _read_codex_title(path: Path, session_id: str) -> str | None:
     index_path = codex_home / "session_index.jsonl"
     title = None
     if index_path.exists():
-        for line in index_path.read_text().splitlines():
+        for line in iter_lines(index_path):
             record = parse_jsonl_line(line)
             if record is not None and record.get("id") == session_id:
                 title = normalize_title(record.get("thread_name")) or title

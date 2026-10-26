@@ -7,6 +7,7 @@ embedding passages, batches, and search queries.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Iterator
 from typing import Protocol, cast
 
@@ -40,32 +41,43 @@ class Embedder:
         The *model_name* selects the HuggingFace model used on first use.
         Tests can inject a *_model* to avoid downloading weights.
         """
+        self._lock = threading.RLock()
         self.model_name = model_name
         self._model: _ModelProtocol | None = _model
 
     @property
     def model(self) -> _ModelProtocol:
         """Return the backing model, loading it on first access."""
-        if self._model is None:
-            self._model = cast("_ModelProtocol", TextEmbedding(model_name=self.model_name))
-            logger.info("Loaded FastEmbed model %s", self.model_name)
-        return self._model
+        with self._lock:
+            if self._model is None:
+                self._model = cast(
+                    "_ModelProtocol", TextEmbedding(model_name=self.model_name, threads=2)
+                )
+                logger.info("Loaded FastEmbed model %s", self.model_name)
+            return self._model
 
     def embed(self, text: str) -> list[float]:
         """Embed a single string and return its dense vector as floats."""
-        vector = next(iter(self.model.embed([text])))
-        return vector.tolist()
+        return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed multiple strings in one pass and return their vectors."""
         if not texts:
             return []
-        return [vector.tolist() for vector in self.model.embed(texts)]
+        vectors = []
+        with self._lock:
+            for start in range(0, len(texts), 8):
+                vectors.extend(
+                    vector.tolist()
+                    for vector in self.model.embed(texts[start : start + 8], batch_size=8)
+                )
+        return vectors
 
     def embed_query(self, query: str) -> list[float]:
         """Embed a search query using FastEmbed's query_embed method."""
-        vector = next(iter(self.model.query_embed([query])))
-        return vector.tolist()
+        with self._lock:
+            vector = next(iter(self.model.query_embed([query], batch_size=1)))
+            return vector.tolist()
 
     @property
     def dimension(self) -> int:

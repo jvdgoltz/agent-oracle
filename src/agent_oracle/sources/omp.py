@@ -19,6 +19,7 @@ from pathlib import Path
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
+    iter_lines,
     normalize_title,
     parse_jsonl_line,
     parse_timestamp,
@@ -36,7 +37,7 @@ def parse_omp_session(path: Path) -> Session:
     header_title: str | None = None
     changed_title: str | None = None
 
-    for line in path.read_text().splitlines():
+    for line in iter_lines(path):
         record = parse_jsonl_line(line)
         if record is None:
             continue
