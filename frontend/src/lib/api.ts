@@ -56,6 +56,17 @@ export interface SessionSummary {
 	started_at: string;
 	summary: string;
 	entities: Entity[];
+	review_sessions: ReviewSessionSummary[];
+}
+
+/** A Codex review session linked to its parent thread. */
+export interface ReviewSessionSummary {
+	id: string;
+	agent: string;
+	cwd: string;
+	started_at: string;
+	summary: string | null;
+	parent_thread_id: string;
 }
 
 /** Full session detail including messages and entities. */
@@ -65,9 +76,11 @@ export interface SessionDetail {
 	agent: string;
 	cwd: string;
 	started_at: string;
+	parent_thread_id: string | null;
 	messages: Message[];
 	entities: Entity[];
 	summary: string;
+	review_sessions: ReviewSessionSummary[];
 }
 
 /** A single search hit across sessions. */
@@ -149,16 +162,51 @@ export interface OverviewReport {
 	}[];
 }
 
+/** Token totals reported by one agent/model grouping. */
+export interface TokenUsageRow {
+	agent: string | null;
+	model: string | null;
+	responses: number;
+	input_tokens: number | null;
+	output_tokens: number | null;
+	cached_input_tokens: number | null;
+	cache_creation_input_tokens: number | null;
+	cache_read_input_tokens: number | null;
+	reasoning_output_tokens: number | null;
+	total_tokens: number | null;
+	cache_hit_rate: number | null;
+}
+
+/** Token statistics for the selected archive scope. */
+export interface TokenUsageReport {
+	agent_model: TokenUsageRow[];
+	agents: TokenUsageRow[];
+	models: TokenUsageRow[];
+}
+
 /** Valid search modes accepted by the backend. */
 export type SearchMode = 'text' | 'vector' | 'hybrid';
+
+/** Fetch provider-reported token totals for the selected scope. */
+export function getTokenUsageStats(
+	agent?: string,
+	start?: string,
+	end?: string
+): Promise<TokenUsageReport> {
+	const params = new URLSearchParams();
+	if (agent) params.set('agent', agent);
+	if (start) params.set('start', start);
+	if (end) params.set('end', end);
+	return get(`/api/stats/tokens?${params}`);
+}
 
 /**
  * Perform a request against the backend and parse the JSON response.
  * @param path - API path relative to the base URL.
  * @returns The parsed JSON response body.
  */
-async function get<T>(path: string): Promise<T> {
-	const response = await fetch(`${API_BASE_URL}${path}`);
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+	const response = await fetch(`${API_BASE_URL}${path}`, { signal });
 	if (!response.ok) {
 		throw await responseError(response);
 	}
@@ -190,10 +238,15 @@ async function responseError(response: Response): Promise<Error> {
 }
 
 /** Start a new Codex agent thread, or resume an existing Codex thread. */
-export function startAgentSession(message: string, resumeThreadId?: string): Promise<AgentSession> {
+export function startAgentSession(
+	message: string,
+	resumeThreadId?: string,
+	imageDataUrl?: string
+): Promise<AgentSession> {
 	return post('/api/agent/sessions', {
 		message,
-		...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {})
+		...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {}),
+		...(imageDataUrl ? { image_data_url: imageDataUrl } : {})
 	});
 }
 
@@ -202,14 +255,26 @@ export function getResumableAgentSessions(): Promise<ResumableAgentSessions> {
 	return get('/api/agent/sessions');
 }
 
+/** Re-index and enrich one archived session from its source file. */
+export function enrichSession(sessionId: string): Promise<{ status: string }> {
+	return post(`/api/sessions/${encodeURIComponent(sessionId)}/enrich`);
+}
+
 /** Load an archived Codex transcript without starting a turn. */
 export function getArchivedAgentSession(threadId: string): Promise<SessionDetail> {
 	return get(`/api/agent/sessions/${encodeURIComponent(threadId)}`);
 }
 
 /** Send a follow-up message to an idle Codex agent thread. */
-export function sendAgentMessage(threadId: string, message: string): Promise<AgentSession> {
-	return post(`/api/agent/sessions/${encodeURIComponent(threadId)}/messages`, { message });
+export function sendAgentMessage(
+	threadId: string,
+	message: string,
+	imageDataUrl?: string
+): Promise<AgentSession> {
+	return post(`/api/agent/sessions/${encodeURIComponent(threadId)}/messages`, {
+		message,
+		...(imageDataUrl ? { image_data_url: imageDataUrl } : {})
+	});
 }
 
 /** Stop the active Codex agent turn. */
@@ -247,8 +312,17 @@ export function getHealth(): Promise<{ status: string }> {
  * @param limit - Maximum number of sessions to return.
  * @param offset - Number of sessions to skip (for pagination).
  */
-export function getSessions(limit = 50, offset = 0): Promise<SessionList> {
-	return get(`/api/sessions?limit=${limit}&offset=${offset}`);
+export function getSessions(
+	limit = 50,
+	offset = 0,
+	includeReviewAgents = false,
+	agent?: string,
+	signal?: AbortSignal
+): Promise<SessionList> {
+	const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+	if (includeReviewAgents) params.set('include_review_agents', 'true');
+	if (agent) params.set('agent', agent);
+	return get(`/api/sessions?${params.toString()}`, signal);
 }
 
 /** Fetch OMP-compatible behavior statistics for an optional archive scope. */
@@ -298,8 +372,13 @@ export interface SearchResponse {
  * @param results - The search results to summarize.
  * @returns The AI summary text, or empty string if unavailable.
  */
-export async function fetchSearchSummary(query: string, results: SearchResult[]): Promise<string> {
+export async function fetchSearchSummary(
+	query: string,
+	results: SearchResult[],
+	signal?: AbortSignal
+): Promise<string> {
 	const response = await fetch(`${API_BASE_URL}/api/search/summary`, {
+		signal,
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ query, results })
@@ -324,12 +403,13 @@ export function search(
 	mode: SearchMode = 'hybrid',
 	limit = 20,
 	agent?: string,
-	entity?: string
+	entity?: string,
+	signal?: AbortSignal
 ): Promise<SearchResponse> {
 	const params = new URLSearchParams({ q, mode, limit: String(limit) });
 	if (agent) params.set('agent', agent);
 	if (entity) params.set('entity', entity);
-	return get(`/api/search?${params.toString()}`);
+	return get(`/api/search?${params.toString()}`, signal);
 }
 
 /**

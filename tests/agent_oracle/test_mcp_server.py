@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import cast
+from unittest.mock import MagicMock
+
+import pytest
 
 from agent_oracle.embed import Embedder
 from agent_oracle.mcp_server import create_mcp_server
@@ -42,26 +45,33 @@ SEARCH_RESULTS = [
 class _FakeStore:
     """A minimal stand-in for :class:`agent_oracle.store.Store`."""
 
+    def __init__(self) -> None:
+        """Record recent-session arguments for the visibility assertion."""
+        self.recent_args: tuple[int, int, bool] | None = None
+
     def search_text(self, query: str, limit: int = 20) -> list[dict]:
         """Return a fake text search result for *query*."""
-        return [{"session_id": "s1", "snippet": "text match", "rank": -1.0}]
+        return [{**SESSION, "session_id": "s1", "snippet": "text match", "rank": -1.0}]
 
     def search_vector(self, query_embedding: list[float], limit: int = 20) -> list[dict]:
         """Return a fake vector search result for *query_embedding*."""
-        return [{"session_id": "s1", "distance": 0.1}]
+        return [{**SESSION, "session_id": "s1", "distance": 0.1}]
 
     def search_hybrid(
         self, query: str, query_embedding: list[float], limit: int = 20
     ) -> list[dict]:
         """Return a fake hybrid search result for *query*."""
-        return [{"session_id": "s1", "score": 0.5}]
+        return [{**SESSION, "session_id": "s1", "score": 0.5}]
 
     def get_session(self, session_id: str) -> dict | None:
         """Return the fake session when it is known, else None."""
         return SESSION if session_id == "s1" else None
 
-    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
+    def list_sessions(
+        self, limit: int = 50, offset: int = 0, *, include_review_agents: bool = False
+    ) -> list[dict]:
         """Return a fake recent-sessions listing."""
+        self.recent_args = (limit, offset, include_review_agents)
         keys = ("id", "agent", "cwd", "title", "started_at", "summary", "enriched")
         return [{k: SESSION[k] for k in keys}]
 
@@ -107,7 +117,12 @@ def test_create_mcp_server_registers_all_tools() -> None:
     """All three tools are registered on the returned server."""
     server = _make_server()
 
-    assert set(_tool_names(server)) == {"search_sessions", "get_session", "list_recent_sessions"}
+    assert set(_tool_names(server)) == {
+        "search_sessions",
+        "get_session",
+        "list_recent_sessions",
+        "token_usage_stats",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -189,3 +204,27 @@ def test_list_recent_sessions_returns_recent_sessions() -> None:
 
     assert result[0]["id"] == "s1"
     assert result[0]["agent"] == "codex"
+
+
+def test_list_recent_sessions_excludes_review_agents() -> None:
+    """The MCP overview always requests the default review-hidden listing."""
+    store = _FakeStore()
+    server = create_mcp_server(cast(Store, store), cast(Embedder, _FakeEmbedder()))
+
+    _call(server, "list_recent_sessions", {"limit": 10, "offset": 3})
+
+    assert store.recent_args == (10, 3, False)
+
+
+@pytest.mark.parametrize("mode", ["text", "vector", "hybrid"])
+def test_search_uses_row_metadata_without_loading_transcripts(mode: str) -> None:
+    """MCP search reads metadata already returned with each candidate."""
+    store = MagicMock()
+    getattr(store, f"search_{mode}").return_value = [
+        {**SESSION, "session_id": "s1", "distance": 0.1}
+    ]
+    server = create_mcp_server(store, cast(Embedder, _FakeEmbedder()))
+    results = _call(server, "search_sessions", {"query": "flaky", "mode": mode})
+    assert results[0]["title"] == SESSION["title"]
+    assert results[0]["snippet"] == SESSION["summary"]
+    store.get_session.assert_not_called()

@@ -13,7 +13,7 @@ def test_linux_installer_configures_reload_and_session_watching() -> None:
     assert "uvicorn agent_oracle.main:app --reload" in script
     assert "run dev -- --port 8732 --host 127.0.0.1" in script
     assert "systemctl --user enable --now" in script
-    assert "Agent Oracle watches Codex, Factory, Claude Code, and Oh My Pi sessions" in script
+    assert "Agent Oracle watches Codex, Factory, Claude Code, Oh My Pi, and Pi sessions" in script
 
 
 def test_linux_installer_creates_backend_frontend_and_backup_units() -> None:

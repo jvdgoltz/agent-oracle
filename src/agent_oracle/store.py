@@ -3,54 +3,22 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from collections.abc import Callable
 from datetime import date
-from typing import Any
 
 import sqlite_vec
 
+from agent_oracle import search_store, session_store
 from agent_oracle.behavior_store import list_behavior_messages as query_behavior_messages
 from agent_oracle.database import StoreDatabase, serialized
 from agent_oracle.models import Session
 from agent_oracle.overview_store import list_overview_rows as query_overview_rows
+from agent_oracle.token_usage_store import list_token_usage as query_token_usage
+from agent_oracle.token_usage_store import replace_token_usage
 
 logger = logging.getLogger(__name__)
 
-
 _RRF_K = 60
-
-
-def _merge_by_score(
-    message_rows: list[sqlite3.Row], summary_rows: list[sqlite3.Row], score_key: str
-) -> list[dict[str, Any]]:
-    """Merge message and summary rows, ordered by *score_key*, dropping NULLs.
-
-    NULL scores (e.g. ``bm25()`` on rows whose FTS5 docsize entry is missing)
-    cannot be ordered and indicate an unscoreable match, so those rows are
-    dropped rather than crashing the sort.
-    """
-    merged = [dict(r) for r in (*message_rows, *summary_rows) if r[score_key] is not None]
-    merged.sort(key=lambda r: r[score_key])
-    return merged
-
-
-def _sanitize_fts_query(query: str) -> str:
-    """Escape a user query into a safe FTS5 MATCH expression.
-
-    FTS5 treats characters like ``? * " ( )`` as query syntax.  To avoid
-    syntax errors, each whitespace-separated token is wrapped in double
-    quotes (phrase query), and any embedded double quotes are doubled
-    (FTS5 escape rule).  Returns an empty string if nothing remains.
-    """
-    tokens = query.strip().split()
-    if not tokens:
-        return ""
-    escaped = []
-    for token in tokens:
-        safe = token.replace('"', '""')
-        escaped.append(f'"{safe}"')
-    return " ".join(escaped)
 
 
 class Store(StoreDatabase):
@@ -61,18 +29,25 @@ class Store(StoreDatabase):
         """Insert or replace *session* and its messages (regular table + FTS5)."""
         unchanged = self._messages_unchanged(session)
         if not unchanged:
-            self._delete_session_messages(session.id)
+            self._delete_session_messages(
+                session.id, delete_search_entries=not session.is_review_agent
+            )
+        replace_token_usage(self.conn, session)
         interrupted_messages = session.interruption_models
         self.conn.execute(
-            "INSERT INTO sessions (id, agent, cwd, title, started_at) VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO sessions (id, agent, cwd, title, started_at, parent_thread_id, "
+            "is_review_agent) VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET agent=excluded.agent, cwd=excluded.cwd, "
-            "title=excluded.title, started_at=excluded.started_at",
+            "title=excluded.title, started_at=excluded.started_at, "
+            "parent_thread_id=excluded.parent_thread_id, is_review_agent=excluded.is_review_agent",
             (
                 session.id,
                 session.agent.value,
                 session.cwd,
                 session.title,
                 session.started_at.isoformat(),
+                session.parent_thread_id,
+                session.is_review_agent,
             ),
         )
         if unchanged:
@@ -98,7 +73,7 @@ class Store(StoreDatabase):
                     interrupted_messages.get(seq),
                 ),
             )
-            if msg.is_searchable:
+            if msg.is_searchable and not session.is_review_agent:
                 self.conn.execute(
                     "INSERT INTO messages_fts (rowid, content) VALUES (?, ?)",
                     (cursor.lastrowid, msg.content),
@@ -108,6 +83,11 @@ class Store(StoreDatabase):
 
     def _messages_unchanged(self, session: Session) -> bool:
         """Keep message IDs and embeddings when a restart sees identical source content."""
+        review = self.conn.execute(
+            "SELECT is_review_agent FROM sessions WHERE id=?", (session.id,)
+        ).fetchone()
+        if review is None or bool(review[0]) != session.is_review_agent:
+            return False
         rows = self.conn.execute(
             "SELECT role,content,timestamp,is_thinking,model,is_system_instruction,is_injected,"
             "is_interrupted,interruption_model FROM messages WHERE session_id=? ORDER BY seq",
@@ -130,20 +110,13 @@ class Store(StoreDatabase):
             for seq, (row, msg) in enumerate(zip(rows, session.messages, strict=True))
         )
 
-    def _delete_session_messages(self, session_id: str) -> None:
+    def _delete_session_messages(
+        self, session_id: str, *, delete_search_entries: bool = True
+    ) -> None:
         """Remove all messages and their FTS and vector index entries for *session_id*."""
-        self.conn.execute(
-            "DELETE FROM messages_fts WHERE rowid IN "
-            "(SELECT id FROM messages WHERE session_id = ? "
-            "AND NOT is_thinking AND NOT is_system_instruction AND NOT is_injected)",
-            (session_id,),
+        session_store.delete_session_messages(
+            self.conn, session_id, delete_search_entries=delete_search_entries
         )
-        self.conn.execute(
-            "DELETE FROM vec_messages WHERE rowid IN "
-            "(SELECT id FROM messages WHERE session_id = ?)",
-            (session_id,),
-        )
-        self.conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
 
     @serialized
     def upsert_embedding(self, message_id: int, embedding: list[float]) -> None:
@@ -174,7 +147,7 @@ class Store(StoreDatabase):
             (summary, session_id),
         )
         rowid = self._session_rowid(session_id)
-        if rowid is not None:
+        if rowid is not None and not self._is_review_agent(session_id):
             self.conn.execute("DELETE FROM sessions_fts WHERE rowid = ?", (rowid,))
             if summary:
                 self.conn.execute(
@@ -184,8 +157,16 @@ class Store(StoreDatabase):
         self.conn.commit()
 
     @serialized
+    def clear_enrichment(self, session_id: str) -> None:
+        """Clear stale summary, entity, and summary-vector data before re-enrichment."""
+        session_store.clear_enrichment(self.conn, session_id)
+        self.conn.commit()
+
+    @serialized
     def upsert_session_embedding(self, session_id: str, embedding: list[float]) -> None:
         """Insert (or replace) the *embedding* of the session summary into vec_sessions."""
+        if self._is_review_agent(session_id):
+            return
         rowid = self._session_rowid(session_id)
         if rowid is None:
             logger.warning("No session %s found; skipping summary embedding", session_id)
@@ -201,6 +182,13 @@ class Store(StoreDatabase):
         """Return the SQLite rowid of *session_id*, or None if it does not exist."""
         row = self.conn.execute("SELECT rowid FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return int(row[0]) if row else None
+
+    def _is_review_agent(self, session_id: str) -> bool:
+        """Return whether *session_id* belongs to a Codex review agent."""
+        row = self.conn.execute(
+            "SELECT is_review_agent FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return row is not None and bool(row["is_review_agent"])
 
     @serialized
     def backfill_summary_indexes(
@@ -219,6 +207,7 @@ class Store(StoreDatabase):
                    EXISTS(SELECT 1 FROM vec_sessions v WHERE v.rowid = s.rowid) AS has_vec
             FROM sessions s
             WHERE s.summary IS NOT NULL AND s.summary != ''
+              AND NOT s.is_review_agent
             """
         ).fetchall()
         need_fts = [r for r in rows if not r["has_fts"]]
@@ -238,103 +227,43 @@ class Store(StoreDatabase):
                     (r["rowid"], sqlite_vec.serialize_float32(embedding)),
                 )
         self.conn.execute(
-            "UPDATE sessions SET enriched = 1 WHERE summary IS NOT NULL AND summary != ''"
+            "UPDATE sessions SET enriched = 1 WHERE summary IS NOT NULL AND summary != '' "
+            "AND NOT is_review_agent"
         )
         self.conn.commit()
         logger.info("Backfilled summary indexes: %d FTS, %d vectors", len(need_fts), len(need_vec))
         return len(need_fts) + len(need_vec)
 
     @serialized
-    def search_text(self, query: str, limit: int = 20) -> list[dict]:
+    def search_text(
+        self, query: str, limit: int = 20, *, agent: str | None = None, entity: str | None = None
+    ) -> list[dict]:
         """FTS5 BM25 search over messages and session summaries."""
-        fts_query = _sanitize_fts_query(query)
-        if not fts_query:
-            return []
-        message_rows = self.conn.execute(
-            """
-            SELECT m.session_id        AS session_id,
-                   m.id                AS message_id,
-                   s.agent             AS agent,
-                   s.cwd               AS cwd,
-                   s.title      AS title,
-                   s.started_at        AS started_at,
-                   s.summary           AS summary,
-                   snippet(messages_fts, 0, '[', ']', '...', 8) AS snippet,
-                   bm25(messages_fts)   AS rank
-            FROM messages_fts
-            JOIN messages m ON m.id = messages_fts.rowid
-            JOIN sessions s ON s.id = m.session_id
-            WHERE messages_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (fts_query, limit),
-        ).fetchall()
-        summary_rows = self.conn.execute(
-            """
-            SELECT s.id                              AS session_id,
-                   NULL                              AS message_id,
-                   s.agent                           AS agent,
-                   s.cwd                             AS cwd,
-                   s.title      AS title,
-                   s.started_at                      AS started_at,
-                   s.summary                         AS summary,
-                   snippet(sessions_fts, 0, '[', ']', '...', 8) AS snippet,
-                   bm25(sessions_fts)                AS rank
-            FROM sessions_fts
-            JOIN sessions s ON s.rowid = sessions_fts.rowid
-            WHERE sessions_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (fts_query, limit),
-        ).fetchall()
-        return _merge_by_score(message_rows, summary_rows, "rank")[:limit]
+        return search_store.search_text(self.conn, query, limit, agent=agent, entity=entity)
 
     @serialized
-    def search_vector(self, query_embedding: list[float], limit: int = 20) -> list[dict]:
-        """sqlite-vec cosine search over message and summary embeddings."""
-        blob = sqlite_vec.serialize_float32(query_embedding)
-        message_rows = self.conn.execute(
-            """
-            SELECT m.session_id AS session_id,
-                   m.id         AS message_id,
-                   s.agent      AS agent,
-                   s.cwd        AS cwd,
-                   s.title      AS title,
-                   s.started_at AS started_at,
-                   s.summary    AS summary,
-                   v.distance  AS distance
-            FROM vec_messages v
-            JOIN messages m ON m.id = v.rowid
-            JOIN sessions s ON s.id = m.session_id
-            WHERE v.embedding MATCH ? AND k = ?
-            ORDER BY v.distance
-            """,
-            (blob, limit),
-        ).fetchall()
-        summary_rows = self.conn.execute(
-            """
-            SELECT s.id        AS session_id,
-                   NULL        AS message_id,
-                   s.agent     AS agent,
-                   s.cwd       AS cwd,
-                   s.title      AS title,
-                   s.started_at AS started_at,
-                   s.summary   AS summary,
-                   v.distance  AS distance
-            FROM vec_sessions v
-            JOIN sessions s ON s.rowid = v.rowid
-            WHERE v.embedding MATCH ? AND k = ?
-            ORDER BY v.distance
-            """,
-            (blob, limit),
-        ).fetchall()
-        return _merge_by_score(message_rows, summary_rows, "distance")[:limit]
+    def search_vector(
+        self,
+        query_embedding: list[float],
+        limit: int = 20,
+        *,
+        agent: str | None = None,
+        entity: str | None = None,
+    ) -> list[dict]:
+        """Find nearest message and summary embeddings within the session filters."""
+        return search_store.search_vector(
+            self.conn, query_embedding, limit, agent=agent, entity=entity
+        )
 
     @serialized
     def search_hybrid(
-        self, query: str, query_embedding: list[float], limit: int = 20
+        self,
+        query: str,
+        query_embedding: list[float],
+        limit: int = 20,
+        *,
+        agent: str | None = None,
+        entity: str | None = None,
     ) -> list[dict]:
         """Reciprocal rank fusion of text and vector results at message level.
 
@@ -343,8 +272,8 @@ class Store(StoreDatabase):
         independently and both surface in the results.  Text results carry a
         matched snippet; vector-only hits contribute score but no snippet.
         """
-        text_results = self.search_text(query, limit=limit)
-        vec_results = self.search_vector(query_embedding, limit=limit)
+        text_results = self.search_text(query, limit=limit, agent=agent, entity=entity)
+        vec_results = self.search_vector(query_embedding, limit=limit, agent=agent, entity=entity)
         # Accumulate RRF scores per candidate and keep the row with a snippet
         # when the same message appears in both lists.
         scores: dict[tuple[str, object], float] = {}
@@ -375,18 +304,38 @@ class Store(StoreDatabase):
         ]
 
     @serialized
-    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
+    def list_sessions(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        include_review_agents: bool = False,
+        agent: str | None = None,
+        cwd: str | None = None,
+    ) -> list[dict]:
         """Return sessions ordered by started_at descending with pagination."""
-        rows = self.conn.execute(
-            """
-            SELECT id, agent, cwd, title, started_at, summary, enriched
-            FROM sessions
-            ORDER BY started_at DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return session_store.list_sessions(
+            self.conn,
+            limit,
+            offset,
+            include_review_agents=include_review_agents,
+            agent=agent,
+            cwd=cwd,
+        )
+
+    @serialized
+    def count_sessions(
+        self, *, include_review_agents: bool = False, agent: str | None = None
+    ) -> int:
+        """Return the number of sessions matching the feed filters."""
+        return session_store.count_sessions(
+            self.conn, include_review_agents=include_review_agents, agent=agent
+        )
+
+    @serialized
+    def list_review_sessions(self, parent_thread_ids: list[str]) -> dict[str, list[dict]]:
+        """Return review summaries grouped by their parent Codex thread ID."""
+        return session_store.list_review_sessions(self.conn, parent_thread_ids)
 
     @serialized
     def list_behavior_messages(
@@ -407,6 +356,13 @@ class Store(StoreDatabase):
         return query_overview_rows(self.conn, agent=agent, start=start, end=end)
 
     @serialized
+    def list_token_usage(
+        self, *, agent: str | None = None, start: date | None = None, end: date | None = None
+    ) -> list[dict]:
+        """Return token usage grouped by agent, model, and their combination."""
+        return query_token_usage(self.conn, agent=agent, start=start, end=end)
+
+    @serialized
     def is_session_indexed(self, session_id: str) -> bool:
         """Return True if *session_id* exists and has been enriched."""
         row = self.conn.execute(
@@ -417,47 +373,14 @@ class Store(StoreDatabase):
     @serialized
     def get_session(self, session_id: str) -> dict | None:
         """Return the session and all its messages, or None if not found."""
-        row = self.conn.execute(
-            "SELECT id, agent, cwd, title, started_at, summary, enriched "
-            "FROM sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        result = dict(row)
-        msg_rows = self.conn.execute(
-            "SELECT id, session_id, role, content, timestamp, seq, "
-            "is_thinking, model, is_system_instruction, is_injected, "
-            "EXISTS(SELECT 1 FROM vec_messages v WHERE v.rowid=messages.id) AS has_embedding "
-            "FROM messages WHERE session_id = ? ORDER BY seq",
-            (session_id,),
-        ).fetchall()
-        result["messages"] = [dict(r) for r in msg_rows]
-        return result
+        return session_store.get_session(self.conn, session_id)
 
     @serialized
     def get_entities(self, session_id: str) -> list[dict]:
         """Return all entities for *session_id*."""
-        rows = self.conn.execute(
-            "SELECT entity_type, entity_value FROM entities WHERE session_id = ?",
-            (session_id,),
-        ).fetchall()
-        return [{"entity_type": r["entity_type"], "entity_value": r["entity_value"]} for r in rows]
+        return session_store.get_entities(self.conn, session_id)
 
     @serialized
     def list_entities(self, session_ids: list[str]) -> dict[str, list[dict]]:
         """Return entities keyed by session_id for all given *session_ids* in one query."""
-        if not session_ids:
-            return {}
-        placeholders = ",".join("?" for _ in session_ids)
-        rows = self.conn.execute(
-            "SELECT session_id, entity_type, entity_value FROM entities "
-            f"WHERE session_id IN ({placeholders})",
-            session_ids,
-        ).fetchall()
-        grouped: dict[str, list[dict]] = {}
-        for r in rows:
-            grouped.setdefault(r["session_id"], []).append(
-                {"entity_type": r["entity_type"], "entity_value": r["entity_value"]}
-            )
-        return grouped
+        return session_store.list_entities(self.conn, session_ids)

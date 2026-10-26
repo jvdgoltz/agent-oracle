@@ -1,17 +1,20 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import AgentBadge from '$lib/AgentBadge.svelte';
-	import { getSession, type Message, type SessionDetail } from '$lib/api';
+	import { enrichSession, getSession, type Message, type SessionDetail } from '$lib/api';
 	import { relativeTime } from '$lib/format';
 	import { renderMarkdown } from '$lib/markdown';
 	import { SvelteSet } from 'svelte/reactivity';
 
-	/** The `id` route parameter for this session. */
-	const id: string = page.params.id ?? '';
+	/** The current `id` route parameter for this session. */
+	const id = $derived(page.params.id ?? '');
 
 	let session: SessionDetail | null = $state(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let enriching = $state(false);
+	let enrichError = $state<string | null>(null);
 
 	/** Messages ordered oldest-first for display. */
 	let orderedMessages: { entry: Message; key: string; html: string }[] = $state([]);
@@ -54,7 +57,7 @@
 	);
 
 	/**
-	 * Load the full session detail once the id parameter is known.
+	 * Load the full session detail when the id parameter changes.
 	 */
 	async function load() {
 		loading = true;
@@ -80,6 +83,20 @@
 	$effect(() => {
 		load();
 	});
+
+	/** Re-index and enrich this session, then refresh the displayed detail. */
+	async function handleEnrich(): Promise<void> {
+		enriching = true;
+		enrichError = null;
+		try {
+			await enrichSession(id);
+		} catch (e) {
+			enrichError = e instanceof Error ? e.message : 'Failed to enrich session';
+		} finally {
+			await load();
+			enriching = false;
+		}
+	}
 
 	/** Human-readable label for a message type. */
 	function roleLabel(entry: Message): string {
@@ -119,12 +136,19 @@
 		</div>
 
 		{#if session.title}
-			<h1 class="session-title">{session.title}</h1>
+			<h1 class="session-title" title={session.title}>{session.title}</h1>
 		{/if}
 
 		{#if session.summary}
 			<p class="session-summary">{session.summary}</p>
 		{/if}
+
+		<div class="enrich-controls">
+			<button class="metadata-toggle" onclick={handleEnrich} disabled={enriching}>
+				{enriching ? 'Enriching…' : 'Enrich'}
+			</button>
+			{#if enrichError}<span class="error">{enrichError}</span>{/if}
+		</div>
 
 		{#if session.entities && session.entities.length > 0}
 			<div class="entities">
@@ -134,6 +158,20 @@
 					>
 				{/each}
 			</div>
+		{/if}
+
+		{#if session.parent_thread_id}
+			<nav class="session-links" aria-label="Related session">
+				<a href={resolve(`/sessions/${session.parent_thread_id}`)}>Parent session</a>
+			</nav>
+		{/if}
+
+		{#if session.review_sessions.length > 0}
+			<nav class="session-links" aria-label="Review sessions">
+				{#each session.review_sessions as review, index (review.id)}
+					<a href={resolve(`/sessions/${review.id}`)}>Review session {index + 1}</a>
+				{/each}
+			</nav>
 		{/if}
 
 		<button class="metadata-toggle" onclick={() => (showSessionMeta = !showSessionMeta)}>
@@ -220,6 +258,12 @@
 		font-weight: 650;
 		line-height: 1.25;
 		color: var(--text);
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		overflow: hidden;
+		overflow-wrap: anywhere;
 	}
 
 	.session-summary {
@@ -253,6 +297,12 @@
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 		color: var(--subtle);
+	}
+
+	.session-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--s3);
 	}
 
 	/* ── Hidden messages bar ─────────────────────────────────────── */

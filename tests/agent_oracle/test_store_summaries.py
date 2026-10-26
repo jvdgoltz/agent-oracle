@@ -56,6 +56,24 @@ def test_upsert_session_embedding_makes_summary_vector_searchable(store: Store) 
     assert results[0]["distance"] == 0.0
 
 
+def test_clear_enrichment_removes_all_derived_summary_data(store: Store) -> None:
+    """Clearing enrichment removes summary, entities, FTS, and vector data."""
+    store.index_session(_make_session())
+    store.set_summary("sess-001", "stale summary")
+    store.upsert_entities("sess-001", [{"type": "product", "value": "SQLite"}])
+    store.upsert_session_embedding("sess-001", _make_embedding(1.0))
+
+    store.clear_enrichment("sess-001")
+
+    row = store.conn.execute(
+        "SELECT summary, enriched FROM sessions WHERE id = ?", ("sess-001",)
+    ).fetchone()
+    assert tuple(row) == (None, 0)
+    assert store.get_entities("sess-001") == []
+    assert store.search_text("stale") == []
+    assert store.search_vector(_make_embedding(1.0)) == []
+
+
 def test_search_text_merges_message_and_summary_hits(store: Store) -> None:
     """Text search returns both message-level and summary-level matches."""
     store.index_session(
@@ -146,3 +164,30 @@ def test_backfill_marks_sessions_enriched(store: Store) -> None:
 def test_backfill_returns_zero_when_nothing_missing(store: Store) -> None:
     """Backfill is a no-op when every summary is already indexed."""
     assert store.backfill_summary_indexes(lambda texts: []) == 0
+
+
+def test_backfill_never_indexes_or_embeds_review_summaries(store: Store) -> None:
+    """Review summaries remain absent from both summary indexes during backfill."""
+    _legacy_session(store, "regular", "regular summary")
+    _legacy_session(store, "review", "review summary")
+    store.conn.execute("UPDATE sessions SET is_review_agent = 1 WHERE id = 'review'")
+    store.conn.commit()
+
+    embedded: list[list[str]] = []
+    count = store.backfill_summary_indexes(
+        lambda texts: embedded.append(texts) or [_make_embedding(1.0) for _ in texts]
+    )
+
+    assert count == 2
+    assert embedded == [["regular summary"]]
+    review_rowid = store.conn.execute("SELECT rowid FROM sessions WHERE id = 'review'").fetchone()[
+        0
+    ]
+    assert (
+        store.conn.execute("SELECT 1 FROM sessions_fts WHERE rowid = ?", (review_rowid,)).fetchone()
+        is None
+    )
+    assert (
+        store.conn.execute("SELECT 1 FROM vec_sessions WHERE rowid = ?", (review_rowid,)).fetchone()
+        is None
+    )

@@ -9,11 +9,14 @@ by taking a :class:`Store` and an :class:`Embedder` as dependencies.
 from __future__ import annotations
 
 import logging
+import re
+from datetime import date
 
 from fastmcp.server import FastMCP
 
 from agent_oracle.embed import Embedder
 from agent_oracle.store import Store
+from agent_oracle.token_usage_summary import summarize_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,7 @@ def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:
             results = store.search_vector(embedding, limit=limit)
         else:
             raise ValueError(f"unknown search mode: {mode!r}")
-        return [_enrich(result, store) for result in results]
+        return [_search_payload(result) for result in results]
 
     @mcp.tool
     def get_session(session_id: str) -> dict | None:
@@ -52,19 +55,32 @@ def create_mcp_server(store: Store, embedder: Embedder) -> FastMCP:
     @mcp.tool
     def list_recent_sessions(limit: int = 20, offset: int = 0) -> list[dict]:
         """Return recent sessions ordered by start time, with pagination."""
-        return store.list_sessions(limit=limit, offset=offset)
+        return store.list_sessions(limit=limit, offset=offset, include_review_agents=False)
+
+    @mcp.tool
+    def token_usage_stats(
+        agent: str | None = None, start: str | None = None, end: str | None = None
+    ) -> dict:
+        """Return token usage grouped by agent, model, and agent-model pair."""
+        if agent is not None and not re.fullmatch("codex|factory|claude|omp|pi", agent):
+            raise ValueError("invalid agent")
+        start_date = date.fromisoformat(start) if start else None
+        end_date = date.fromisoformat(end) if end else None
+        if start_date is not None and end_date is not None and start_date > end_date:
+            raise ValueError("start must not be after end")
+        rows = store.list_token_usage(agent=agent, start=start_date, end=end_date)
+        return summarize_token_usage(rows)
 
     return mcp
 
 
-def _enrich(result: dict, store: Store) -> dict:
-    """Merge search *result* with its session metadata into a tool response."""
-    session = store.get_session(result["session_id"]) or {}
-    snippet = result.get("snippet") or session.get("summary")
+def _search_payload(result: dict) -> dict:
+    """Project a search row into a tool response without loading its transcript."""
+    snippet = result.get("snippet") or result.get("summary")
     score = result.get("score", result.get("rank", result.get("distance")))
     return {
         "session_id": result["session_id"],
         "snippet": snippet,
         "score": score,
-        **{field: session.get(field) for field in _SESSION_FIELDS},
+        **{field: result.get(field) for field in _SESSION_FIELDS},
     }

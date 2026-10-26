@@ -13,6 +13,8 @@ from typing import Concatenate, ParamSpec, TypeVar
 import sqlite_vec
 
 logger = logging.getLogger(__name__)
+_REVIEW_SCHEMA_COLUMNS = {"is_review_agent", "parent_thread_id"}
+_REVIEW_MIGRATION_COMMAND = "uv run python scripts/backfill_codex_review_sessions.py --write"
 _EMBED_DIM = 384
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
@@ -41,12 +43,19 @@ class StoreDatabase:
         self._lock = threading.RLock()
         self.db_path = db_path
         self.conn = self._connect()
-        self._init_schema()
+        try:
+            self._init_schema()
+        except Exception:
+            self.conn.close()
+            raise
         logger.info("Store initialized at %s", db_path)
 
     def _connect(self) -> sqlite3.Connection:
         """Open the SQLite connection and load the sqlite-vec extension."""
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
+        # Shared cached statements race across API threads (CPython issue #118172).
+        conn = sqlite3.connect(
+            str(self.db_path), check_same_thread=False, timeout=30, cached_statements=0
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 30000")
         conn.enable_load_extension(True)
@@ -64,7 +73,9 @@ class StoreDatabase:
                 title     TEXT,
                 started_at TEXT,
                 summary   TEXT,
-                enriched  INTEGER DEFAULT 0
+                enriched  INTEGER DEFAULT 0,
+                parent_thread_id TEXT,
+                is_review_agent INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -110,3 +121,17 @@ class StoreDatabase:
             f"USING vec0(embedding float[{_EMBED_DIM}])"
         )
         self.conn.commit()
+        self._require_review_session_schema()
+
+    def _require_review_session_schema(self) -> None:
+        """Require an explicit migration before using a pre-review-session database."""
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sessions)")}
+        missing = _REVIEW_SCHEMA_COLUMNS - columns
+        if missing:
+            names = ", ".join(sorted(missing))
+            raise RuntimeError(
+                "Database requires the Codex review-session migration "
+                f"(missing {names}). Preview it with "
+                "uv run python scripts/backfill_codex_review_sessions.py, then run "
+                f"{_REVIEW_MIGRATION_COMMAND} after confirmation."
+            )

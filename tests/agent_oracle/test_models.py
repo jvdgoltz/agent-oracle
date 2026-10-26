@@ -33,7 +33,13 @@ def test_session_creation() -> None:
 
 def test_agent_type_values() -> None:
     """AgentType has exactly the supported agents."""
-    assert {AgentType.CODEX, AgentType.FACTORY, AgentType.CLAUDE, AgentType.OMP}
+    assert set(AgentType) == {
+        AgentType.CODEX,
+        AgentType.FACTORY,
+        AgentType.CLAUDE,
+        AgentType.OMP,
+        AgentType.PI,
+    }
 
 
 def test_message_metadata_defaults() -> None:
@@ -62,6 +68,13 @@ def test_system_instruction_not_searchable() -> None:
     msg = Message(
         role=MessageRole.DEVELOPER, content="You are...", timestamp=ts, is_system_instruction=True
     )
+    assert msg.is_searchable is False
+
+
+def test_system_role_not_searchable_without_metadata_flag() -> None:
+    """A system-role message is excluded even when its source flags are absent."""
+    ts = datetime.now(UTC)
+    msg = Message(role=MessageRole.SYSTEM, content="system context", timestamp=ts)
     assert msg.is_searchable is False
 
 

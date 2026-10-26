@@ -16,6 +16,7 @@ from pathlib import Path
 from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
+    is_injected_message,
     iter_lines,
     normalize_title,
     parse_jsonl_line,
@@ -114,7 +115,12 @@ def _extract_messages(record: dict, timestamp: datetime, model: str | None) -> l
         return []
     content_parts = msg_data.get("content", [])
     message_id = record.get("id")
-    is_injected = msg_data.get("visibility") == "llm_only"
+    text = "".join(
+        p.get("text", "") for p in content_parts if isinstance(p, dict) and p.get("type") == "text"
+    )
+    is_injected = msg_data.get("visibility") == "llm_only" or (
+        role is MessageRole.USER and is_injected_message(text)
+    )
     is_system = role is MessageRole.SYSTEM
 
     def build(content: str, *, is_thinking: bool = False) -> Message:
@@ -141,9 +147,6 @@ def _extract_messages(record: dict, timestamp: datetime, model: str | None) -> l
             if thinking:
                 messages.append(build(thinking, is_thinking=True))
 
-    text = "".join(
-        p.get("text", "") for p in content_parts if isinstance(p, dict) and p.get("type") == "text"
-    )
     if text:
         messages.append(build(text))
     return messages

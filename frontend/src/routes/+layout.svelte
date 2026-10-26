@@ -20,7 +20,7 @@
 	/>
 </svelte:head>
 
-<nav class="nav">
+<nav class="nav" aria-label="Main navigation">
 	<div class="nav-inner">
 		<a class="logo" href={resolve('/')}>
 			<span class="logo-icon">◈</span>
@@ -39,9 +39,9 @@
 	</div>
 </nav>
 
-<div class="layout">
+<main class="layout">
 	{@render children()}
-</div>
+</main>
 
 <style>
 	/* ── Design tokens ─────────────────────────────────────────────── */
@@ -58,8 +58,8 @@
 
 		/* Text */
 		--text: #e2e2e8;
-		--muted: #6b6b80;
-		--subtle: #3a3a50;
+		--muted: #9292a3;
+		--subtle: #747489;
 
 		/* Accent */
 		--accent: #7aa2f7;
@@ -116,6 +116,11 @@
 	:global(a) {
 		color: var(--accent);
 		text-decoration: none;
+	}
+
+	:global(:focus-visible) {
+		outline: 2px solid var(--accent);
+		outline-offset: 3px;
 	}
 
 	:global(a:hover) {
@@ -260,6 +265,16 @@
 	}
 
 	@media (max-width: 640px) {
+		.nav-inner {
+			height: auto;
+			min-height: 48px;
+			flex-wrap: wrap;
+			gap: var(--s2) var(--s3);
+			padding: var(--s2) var(--s4);
+		}
+		.back-link {
+			flex-basis: 100%;
+		}
 		.layout {
 			padding: var(--s4);
 		}

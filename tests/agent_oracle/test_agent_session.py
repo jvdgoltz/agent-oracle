@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import queue
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from openai_codex import ImageInput, TextInput
 
+from agent_oracle.agent_recovery import AgentRecoveryLease
 from agent_oracle.agent_session import (
+    _RECOVERY_PROMPT,
     _REPO_ROOT,
     AgentSessionError,
     AgentSessionManager,
@@ -67,6 +71,23 @@ def test_start_streams_user_and_sdk_events() -> None:
     assert events[2]["data"] == {"delta": "Hi"}
 
 
+def test_start_passes_image_data_url_to_codex() -> None:
+    """An image data URL becomes a typed Codex image input alongside the prompt."""
+    thread = MagicMock(id="thread-1")
+    thread.turn.return_value = MagicMock()
+    codex = MagicMock()
+    codex.thread_start.return_value = thread
+    manager = AgentSessionManager(codex_factory=lambda: codex)
+
+    manager.start("Inspect this", image_data_url="data:image/png;base64,AAAA")
+
+    turn_input = thread.turn.call_args.args[0]
+    assert isinstance(turn_input[0], TextInput)
+    assert turn_input[0].text == "Inspect this"
+    assert isinstance(turn_input[1], ImageInput)
+    assert turn_input[1].url == "data:image/png;base64,AAAA"
+
+
 def test_start_rejects_a_second_active_session() -> None:
     """Only one active session can run at once."""
     manager = AgentSessionManager(codex_factory=MagicMock())
@@ -79,12 +100,74 @@ def test_start_rejects_a_second_active_session() -> None:
 def test_stop_interrupts_the_running_turn() -> None:
     """Stopping a session forwards the request to Codex."""
     manager = AgentSessionManager(codex_factory=MagicMock())
-    turn = MagicMock()
+    turn = MagicMock(id="turn-1")
     manager._active = MagicMock(thread_id="thread-1", running=True, turn=turn)
 
     manager.stop("thread-1")
 
     turn.interrupt.assert_called_once_with()
+
+
+def test_stop_disables_recovery_before_interrupting(tmp_path: Path) -> None:
+    """A manual stop persists its intent before Codex receives the interrupt."""
+    lease = AgentRecoveryLease(tmp_path / "agent-turn.json")
+    manager = AgentSessionManager(codex_factory=MagicMock(), recovery_lease=lease)
+    turn = MagicMock(id="turn-1")
+    manager._active = MagicMock(thread_id="thread-1", running=True, turn=turn)
+    lease.mark_running("thread-1", "turn-1")
+
+    manager.stop("thread-1")
+
+    assert lease.read() is None
+    turn.interrupt.assert_called_once_with()
+
+
+def test_interrupted_turn_recovers_after_backend_restart(tmp_path: Path) -> None:
+    """A running lease and interrupted Codex turn start one continuation turn."""
+    lease = AgentRecoveryLease(tmp_path / "agent-turn.json")
+    lease.mark_running("saved-thread", "old-turn")
+    recovered_turn = MagicMock(id="new-turn")
+    recovered_turn.stream.return_value = _Stream()
+    thread = MagicMock(id="saved-thread")
+    thread.read.return_value.thread.turns = [
+        MagicMock(id="old-turn", status=MagicMock(value="interrupted"))
+    ]
+    thread.turn.return_value = recovered_turn
+    codex = MagicMock()
+    codex.thread_resume.return_value = thread
+    manager = AgentSessionManager(codex_factory=lambda: codex, recovery_lease=lease)
+
+    state = manager.recover_interrupted()
+    assert state is not None
+    events = list(manager.events(state.thread_id))
+
+    assert thread.turn.call_args.args == (_RECOVERY_PROMPT,)
+    assert [event["type"] for event in events] == [
+        "auth",
+        "recovered",
+        "assistant",
+        "completed",
+    ]
+    assert lease.read() is None
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "inProgress"])
+def test_recovery_rejects_non_interrupted_last_turn(tmp_path: Path, status: str) -> None:
+    """Only an interrupted physical turn can consume a running recovery lease."""
+    lease = AgentRecoveryLease(tmp_path / "agent-turn.json")
+    lease.mark_running("saved-thread", "old-turn")
+    thread = MagicMock(id="saved-thread")
+    thread.read.return_value.thread.turns = [
+        MagicMock(id="old-turn", status=MagicMock(value=status))
+    ]
+    codex = MagicMock()
+    codex.thread_resume.return_value = thread
+    manager = AgentSessionManager(codex_factory=lambda: codex, recovery_lease=lease)
+
+    assert manager.recover_interrupted() is None
+
+    thread.turn.assert_not_called()
+    assert lease.read() is None
 
 
 def test_start_assigns_the_turn_before_control_can_interrupt() -> None:
@@ -260,6 +343,23 @@ def test_start_configures_codex_for_the_repository() -> None:
     assert "untrusted" in options["base_instructions"]
     turn_options = thread.turn.call_args.kwargs
     assert turn_options["effort"] == "medium"
+
+
+def test_default_codex_configuration_uses_mounted_agent_oracle_mcp() -> None:
+    """New threads default to the MCP route mounted by the FastAPI app."""
+    thread = MagicMock(id="thread-1")
+    turn = MagicMock(id="turn-1")
+    turn.stream.return_value = _Stream()
+    thread.turn.return_value = turn
+    codex = MagicMock()
+    codex.thread_start.return_value = thread
+    manager = AgentSessionManager(codex_factory=lambda: codex)
+
+    state = manager.start("Investigate")
+    list(manager.events(state.thread_id))
+
+    options = codex.thread_start.call_args.kwargs
+    assert options["config"]["mcp_servers"]["agent-oracle"]["url"] == ("http://127.0.0.1:8731/mcp/")
 
 
 def test_new_session_closes_an_idle_client() -> None:

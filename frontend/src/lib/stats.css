@@ -1,0 +1,161 @@
+/* Shared presentation for the two archive statistics pages. */
+.statistics {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--s5);
+}
+.statistics .heading {
+	display: flex;
+	gap: var(--s4);
+	align-items: end;
+	justify-content: space-between;
+}
+.statistics .filters {
+	display: flex;
+	gap: var(--s4);
+	flex-wrap: wrap;
+}
+.statistics .cards {
+	display: grid;
+	gap: var(--s4);
+	grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+}
+.statistics .charts {
+	display: grid;
+	gap: var(--s4);
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.statistics .tables {
+	display: flex;
+	gap: var(--s4);
+	flex-wrap: wrap;
+	align-items: start;
+}
+.statistics h1 {
+	margin: 0;
+	font-size: 22px;
+}
+.statistics h2 {
+	font-size: 15px;
+}
+.statistics p {
+	color: var(--muted);
+}
+.statistics small,
+.statistics .scope {
+	color: var(--muted);
+}
+.statistics label {
+	display: grid;
+	gap: var(--s1);
+	color: var(--muted);
+	font-size: 12px;
+}
+.statistics select,
+.statistics input {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r2);
+	color: var(--text);
+	padding: var(--s2);
+}
+.statistics .card {
+	display: grid;
+	gap: var(--s1);
+	padding: var(--s4);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r3);
+}
+.statistics .card strong {
+	font-variant-numeric: tabular-nums;
+}
+.statistics .card small {
+	font-size: 11px;
+}
+.statistics .chart-card {
+	min-width: 0;
+	padding: var(--s4);
+	background: linear-gradient(160deg, var(--surface), var(--bg));
+	border: 1px solid var(--border);
+	border-radius: var(--r3);
+}
+.statistics .section-heading {
+	display: flex;
+	align-items: start;
+	justify-content: space-between;
+	gap: var(--s3);
+	margin-bottom: var(--s4);
+}
+.statistics .section-heading p {
+	margin: 0;
+	font-size: 11px;
+}
+.statistics .chart-total {
+	color: var(--accent);
+	font-size: 11px;
+	white-space: nowrap;
+}
+.statistics .bar-list {
+	display: grid;
+	gap: var(--s3);
+}
+.statistics .bar-row {
+	display: grid;
+	gap: var(--s1);
+}
+.statistics .bar-label {
+	display: flex;
+	gap: var(--s2);
+	min-width: 0;
+}
+.statistics .bar-label code {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.statistics .track {
+	overflow: hidden;
+	border-radius: 99px;
+	background: var(--elevated);
+}
+.statistics .bar {
+	display: block;
+	height: 100%;
+	min-width: 0;
+	border-radius: inherit;
+}
+.statistics .empty {
+	padding: var(--s5) 0;
+	text-align: center;
+}
+.statistics .tables section {
+	flex: 1 1 350px;
+	min-width: 0;
+}
+.statistics table {
+	width: 100%;
+	border-collapse: collapse;
+}
+.statistics th {
+	padding: var(--s2);
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+	font-size: 12px;
+	color: var(--muted);
+	font-weight: 500;
+}
+.statistics td {
+	padding: var(--s2);
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+}
+@media (max-width: 640px) {
+	.statistics .charts {
+		grid-template-columns: 1fr;
+	}
+	.statistics .heading {
+		align-items: start;
+		flex-direction: column;
+	}
+}

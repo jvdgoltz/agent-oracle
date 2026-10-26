@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from agent_oracle.api import create_app
@@ -86,17 +87,21 @@ def test_list_sessions_returns_paginated_results() -> None:
         },
     ]
     store.list_sessions.return_value = sessions
+    store.count_sessions.return_value = 12
     store.list_entities.return_value = {
         "s2": [{"entity_type": "product", "entity_value": "SQLite"}]
     }
+    store.list_review_sessions.return_value = {}
     client, store, _embedder = _client(store=store)
     resp = client.get("/api/sessions?limit=10&offset=5")
     assert resp.status_code == 200
     body = resp.json()
     assert body["sessions"][0]["entities"] == [{"type": "product", "value": "SQLite"}]
     assert body["sessions"][1]["entities"] == []
-    assert body["total"] == 2
-    store.list_sessions.assert_called_once_with(limit=10, offset=5)
+    assert body["total"] == 12
+    store.list_sessions.assert_called_once_with(
+        limit=10, offset=5, include_review_agents=False, agent=None
+    )
 
     for key in ("agent", "cwd", "title", "summary"):
         assert body["sessions"][0][key] == sessions[0][key]
@@ -124,14 +129,18 @@ def test_get_session_returns_detail() -> None:
         ],
     }
     store.get_session.return_value = session
+    store.get_entities.return_value = [{"entity_type": "product", "entity_value": "SQLite"}]
+    store.list_review_sessions.return_value = {}
     client, store, _embedder = _client(store=store)
     resp = client.get("/api/sessions/s1")
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == "s1"
     assert body["agent"] == "codex"
+    assert body["entities"] == [{"type": "product", "value": "SQLite"}]
     assert body["messages"][0]["content"] == "hi"
     store.get_session.assert_called_once_with("s1")
+    store.get_entities.assert_called_once_with("s1")
 
 
 def test_get_session_missing_returns_404() -> None:
@@ -179,7 +188,7 @@ def test_search_text_mode_does_not_embed() -> None:
             "score": -1.0,
         }
     ]
-    store.search_text.assert_called_once_with("bug", limit=20)
+    store.search_text.assert_called_once_with("bug", limit=20, agent=None, entity=None)
     embedder.embed_query.assert_not_called()
 
 
@@ -231,7 +240,9 @@ def test_search_hybrid_embeds_query() -> None:
         }
     ]
     embedder.embed_query.assert_called_once_with("bug")
-    store.search_hybrid.assert_called_once_with("bug", [0.1, 0.2], limit=20)
+    store.search_hybrid.assert_called_once_with(
+        "bug", [0.1, 0.2], limit=20, agent=None, entity=None
+    )
 
 
 def test_search_vector_embeds_query() -> None:
@@ -259,86 +270,59 @@ def test_search_vector_embeds_query() -> None:
         }
     ]
     embedder.embed_query.assert_called_once_with("fix")
-    store.search_vector.assert_called_once_with([0.3, 0.4], limit=20)
+    store.search_vector.assert_called_once_with([0.3, 0.4], limit=20, agent=None, entity=None)
 
 
-def test_search_filters_by_agent() -> None:
-    """Results are dropped when their session agent does not match."""
-    store = MagicMock()
-    store.search_text.return_value = [
-        {"session_id": "s1", "snippet": "a", "rank": -1.0},
-        {"session_id": "s2", "snippet": "b", "rank": -2.0},
+@pytest.mark.parametrize("mode", ["text", "vector", "hybrid"])
+def test_search_passes_filters_to_candidate_queries(mode: str) -> None:
+    """The API scopes candidates in the store without reading transcripts or per-hit entities."""
+    client, store, embedder = _client()
+    search = getattr(store, f"search_{mode}")
+    search.return_value = [{"session_id": "s1", "agent": "codex", "snippet": "a", "rank": -1.0}]
+    store.list_entities.return_value = {}
+    embedder.embed_query.return_value = [0.1, 0.2]
+    response = client.get(f"/api/search?q=bug&mode={mode}&agent=codex&entity=SQLite&limit=1")
+    assert response.status_code == 200
+    assert [row["session_id"] for row in response.json()["results"]] == ["s1"]
+    assert search.call_args.kwargs == {"limit": 1, "agent": "codex", "entity": "SQLite"}
+    store.get_session.assert_not_called()
+    store.get_entities.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "mode, field, scores",
+    [
+        ("text", "rank", [-3.0, -2.0, -1.0]),
+        ("vector", "distance", [0.1, 0.2, 0.3]),
+        ("hybrid", "score", [0.9, 0.8, 0.7]),
+    ],
+)
+def test_search_grouping_preserves_best_ordered_hit(
+    mode: str, field: str, scores: list[float]
+) -> None:
+    """Grouping retains the first ranked hit and the session ranking."""
+    client, store, _ = _client()
+    getattr(store, f"search_{mode}").return_value = [
+        {"session_id": "s1", "snippet": "best", field: scores[0]},
+        {"session_id": "s2", "snippet": "middle", field: scores[1]},
+        {"session_id": "s1", "snippet": "worse", field: scores[2]},
     ]
-    store.get_session.side_effect = [
-        {"id": "s1", "agent": "codex"},
-        {"id": "s2", "agent": "claude"},
-    ]
-    client, store, _embedder = _client(store=store)
-    resp = client.get("/api/search?q=bug&mode=text&agent=codex")
-    assert resp.status_code == 200
-    assert [r["session_id"] for r in resp.json()["results"]] == ["s1"]
+    store.list_entities.return_value = {}
+    results = client.get(f"/api/search?q=needle&mode={mode}").json()["results"]
+    assert [row["session_id"] for row in results] == ["s1", "s2"]
+    assert results[0]["score"] == scores[0]
+    assert results[0]["snippet"] == "best"
+    assert results[0]["message_snippets"] == ["best", "worse"]
 
 
-def test_search_filters_by_entity() -> None:
-    """Results are dropped when their session lacks the matching entity."""
-    store = MagicMock()
-    store.search_text.return_value = [
-        {"session_id": "s1", "snippet": "a", "rank": -1.0},
-        {"session_id": "s2", "snippet": "b", "rank": -2.0},
-    ]
-    store.get_entities.side_effect = [
-        [{"entity_type": "product", "entity_value": "SQLite"}],
-        [{"entity_type": "person", "entity_value": "Ada"}],
-    ]
-    client, store, _embedder = _client(store=store)
-    resp = client.get("/api/search?q=bug&mode=text&entity=SQLite")
-    assert resp.status_code == 200
-    assert [r["session_id"] for r in resp.json()["results"]] == ["s1"]
-
-
-def test_search_summary_returns_ai_summary() -> None:
-    """The summary endpoint calls the summarizer and returns its text."""
-    summarizer = MagicMock()
-    summarizer.summarize.return_value = "These sessions cover SQLite usage."
-    client, _store, _embedder = _client(summarizer=summarizer)
-    resp = client.post(
-        "/api/search/summary",
-        json={"query": "sqlite", "results": [{"snippet": "a", "summary": "b"}]},
+def test_session_feed_filters_and_returns_matching_total() -> None:
+    """The feed applies its agent filter before pagination and reports all matches."""
+    client, store, _ = _client()
+    store.list_sessions.return_value = []
+    store.count_sessions.return_value = 17
+    response = client.get("/api/sessions?agent=claude&limit=2&offset=20")
+    assert response.json() == {"sessions": [], "total": 17}
+    store.list_sessions.assert_called_once_with(
+        limit=2, offset=20, include_review_agents=False, agent="claude"
     )
-    assert resp.status_code == 200
-    assert resp.json() == {"summary": "These sessions cover SQLite usage."}
-    summarizer.summarize.assert_called_once_with("sqlite", [{"snippet": "a", "summary": "b"}])
-
-
-def test_search_summary_without_summarizer_returns_empty() -> None:
-    """When no summarizer is configured, the summary endpoint returns empty."""
-    client, _store, _embedder = _client()
-    resp = client.post(
-        "/api/search/summary",
-        json={"query": "sqlite", "results": [{"snippet": "a"}]},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"summary": ""}
-
-
-def test_search_summary_with_no_results_returns_empty() -> None:
-    """When no results are provided, the summary endpoint returns empty."""
-    summarizer = MagicMock()
-    client, _store, _embedder = _client(summarizer=summarizer)
-    resp = client.post("/api/search/summary", json={"query": "x", "results": []})
-    assert resp.status_code == 200
-    assert resp.json() == {"summary": ""}
-    summarizer.summarize.assert_not_called()
-
-
-def test_search_summary_fails_open_on_summarizer_error() -> None:
-    """A summarizer failure logs and returns an empty summary with 200."""
-    summarizer = MagicMock()
-    summarizer.summarize.side_effect = RuntimeError("codex down")
-    client, _store, _embedder = _client(summarizer=summarizer)
-    resp = client.post(
-        "/api/search/summary",
-        json={"query": "sqlite", "results": [{"snippet": "a"}]},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"summary": ""}
+    store.count_sessions.assert_called_once_with(include_review_agents=False, agent="claude")

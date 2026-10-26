@@ -12,19 +12,32 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from datetime import date
-from typing import Annotated, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from agent_oracle.agent_payload import source_messages as _source_messages
+from agent_oracle.agent_payload import validated_image_data_url as _validated_image_data_url
+from agent_oracle.agent_recovery import AgentRecoveryLease
 from agent_oracle.agent_session import AgentSessionError, AgentSessionManager, encode_sse
 from agent_oracle.behavior import summarize_messages
 from agent_oracle.embed import Embedder
 from agent_oracle.overview_summary import summarize_overview
 from agent_oracle.search_summary import SearchSummarizer
-from agent_oracle.sources.codex import load_codex_session
+from agent_oracle.session_api import register_enrich_route, register_summary_route
+from agent_oracle.sources.codex import (
+    archived_codex_session_ids,
+    is_codex_session_archived,
+    load_codex_session,
+)
 from agent_oracle.store import Store
+from agent_oracle.token_usage_api import register_token_usage_route
+
+if TYPE_CHECKING:
+    from agent_oracle.watcher import SessionWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +52,7 @@ def create_app(
     embedder: Embedder,
     summarizer: SearchSummarizer | None = None,
     agent_manager: AgentSessionManager | None = None,
+    watcher: SessionWatcher | None = None,
 ) -> FastAPI:
     """Build and configure the Agent Oracle FastAPI application.
 
@@ -49,7 +63,10 @@ def create_app(
     app.state.store = store
     app.state.embedder = embedder
     app.state.summarizer = summarizer
-    app.state.agent_manager = agent_manager or AgentSessionManager()
+    app.state.agent_manager = agent_manager or AgentSessionManager(
+        recovery_lease=AgentRecoveryLease(Path.home() / ".agent-oracle" / "agent-turn.json")
+    )
+    app.state.watcher = watcher
 
     app.add_middleware(
         CORSMiddleware,
@@ -75,21 +92,36 @@ def _register_routes(app: FastAPI) -> None:
         request: Request,
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
+        include_review_agents: bool = Query(default=False),
+        agent: str | None = Query(default=None),
     ) -> dict[str, Any]:
         """Return the most recent sessions with pagination metadata."""
         store = request.app.state.store
-        sessions = store.list_sessions(limit=limit, offset=offset)
+        sessions = store.list_sessions(
+            limit=limit,
+            offset=offset,
+            include_review_agents=include_review_agents,
+            agent=agent,
+        )
         entities = store.list_entities([s["id"] for s in sessions])
+        reviews = store.list_review_sessions([s["id"] for s in sessions])
         for session in sessions:
             session["entities"] = _normalize_entities(entities.get(session["id"], []))
-        return {"sessions": sessions, "total": len(sessions)}
+            session["review_sessions"] = reviews.get(session["id"], [])
+        return {
+            "sessions": sessions,
+            "total": store.count_sessions(include_review_agents=include_review_agents, agent=agent),
+        }
 
     @app.get("/api/sessions/{session_id}")
     def get_session(request: Request, session_id: str) -> dict[str, Any]:
         """Return a single session with its messages, or 404 if unknown."""
-        session = request.app.state.store.get_session(session_id)
+        store = request.app.state.store
+        session = store.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
+        session["entities"] = _normalize_entities(store.get_entities(session_id))
+        session["review_sessions"] = store.list_review_sessions([session_id]).get(session_id, [])
         return session
 
     @app.get("/api/search")
@@ -108,8 +140,7 @@ def _register_routes(app: FastAPI) -> None:
         """
         store = request.app.state.store
         embedder = request.app.state.embedder
-        raw_results = _run_search(store, embedder, q, mode, limit)
-        raw_results = _filter_results(store, raw_results, agent=agent, entity=entity)
+        raw_results = _run_search(store, embedder, q, mode, limit, agent=agent, entity=entity)
         grouped = _group_by_session(raw_results)
         entities = store.list_entities([r["session_id"] for r in grouped])
         payloads = [
@@ -117,9 +148,11 @@ def _register_routes(app: FastAPI) -> None:
         ]
         return {"results": payloads}
 
-    _register_summary_route(app)
+    register_summary_route(app)
+    register_enrich_route(app)
     _register_behavior_route(app)
     _register_overview_route(app)
+    register_token_usage_route(app)
     _register_agent_routes(app)
 
     @app.get("/api/entities")
@@ -129,42 +162,13 @@ def _register_routes(app: FastAPI) -> None:
         return {"entities": session_entities}
 
 
-def _register_summary_route(app: FastAPI) -> None:
-    """Register the POST /api/search/summary endpoint."""
-
-    @app.post("/api/search/summary")
-    def search_summary(
-        request: Request,
-        body: dict[str, Any],
-    ) -> dict[str, str]:
-        """Generate an AI summary of search results for a given query.
-
-        Accepts a JSON body with ``query`` and ``results`` (the search payloads)
-        and returns ``{"summary": "..."}``. Returns an empty summary if no
-        summarizer is configured or the agent run fails.
-        """
-        summarizer = request.app.state.summarizer
-        if summarizer is None:
-            return {"summary": ""}
-        query = body.get("query", "")
-        results = body.get("results", [])
-        if not results:
-            return {"summary": ""}
-        try:
-            summary = summarizer.summarize(query, results)
-        except Exception:
-            logger.warning("Search summary generation failed", exc_info=True)
-            summary = ""
-        return {"summary": summary}
-
-
 def _register_behavior_route(app: FastAPI) -> None:
     """Register the OMP-compatible user behavior statistics endpoint."""
 
     @app.get("/api/stats/behavior")
     def behavior(
         request: Request,
-        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp)$")] = None,
+        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp|pi)$")] = None,
         start: date | None = None,
         end: date | None = None,
     ) -> dict[str, Any]:
@@ -185,7 +189,7 @@ def _register_overview_route(app: FastAPI) -> None:
     @app.get("/api/stats/overview")
     def overview(
         request: Request,
-        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp)$")] = None,
+        agent: Annotated[str | None, Query(pattern="^(codex|factory|claude|omp|pi)$")] = None,
         start: date | None = None,
         end: date | None = None,
     ) -> dict[str, Any]:
@@ -218,9 +222,17 @@ def _register_agent_start_route(app: FastAPI) -> None:
         if resume_thread_id is not None:
             _validate_resume_session(request.app.state.store, resume_thread_id)
         try:
-            state = request.app.state.agent_manager.start(
-                body.get("message", ""), resume_thread_id=resume_thread_id
-            )
+            image_data_url = _validated_image_data_url(body)
+            if image_data_url is None:
+                state = request.app.state.agent_manager.start(
+                    body.get("message", ""), resume_thread_id=resume_thread_id
+                )
+            else:
+                state = request.app.state.agent_manager.start(
+                    body.get("message", ""),
+                    resume_thread_id=resume_thread_id,
+                    image_data_url=image_data_url,
+                )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except AgentSessionError as exc:
@@ -261,11 +273,14 @@ def _register_agent_control_routes(app: FastAPI) -> None:
         """Send a follow-up message on an idle, existing Codex thread."""
         try:
             manager = request.app.state.agent_manager
-            if manager.has_thread(thread_id):
-                state = manager.send_message(thread_id, body.get("message", ""))
-            else:
-                _validate_resume_session(request.app.state.store, thread_id)
-                state = manager.resume_message(thread_id, body.get("message", ""))
+            image_data_url = _validated_image_data_url(body)
+            state = _send_agent_message(
+                manager,
+                request.app.state.store,
+                thread_id,
+                body.get("message", ""),
+                image_data_url,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except AgentSessionError as exc:
@@ -298,7 +313,9 @@ def _register_archived_agent_route(app: FastAPI) -> None:
     @app.get("/api/agent/sessions/{thread_id}")
     def get_archived_agent_session(request: Request, thread_id: str) -> dict[str, Any]:
         """Return an eligible archived Codex transcript without resuming Codex."""
-        _validate_resume_session(request.app.state.store, thread_id)
+        if request.app.state.agent_manager.is_running(thread_id) is True:
+            raise HTTPException(status_code=409, detail="agent session is still running")
+        _validate_agent_session(request.app.state.store, thread_id)
         session = request.app.state.store.get_session(thread_id)
         assert session is not None
         source_session = load_codex_session(thread_id)
@@ -321,6 +338,24 @@ async def _sse_events(
             yield encode_sse(event)
 
 
+def _send_agent_message(
+    manager: AgentSessionManager,
+    store: Store,
+    thread_id: str,
+    message: str,
+    image_data_url: str | None,
+) -> Any:
+    """Send a text or image turn to the live thread, resuming it when needed."""
+    if manager.has_thread(thread_id):
+        if image_data_url is None:
+            return manager.send_message(thread_id, message)
+        return manager.send_message(thread_id, message, image_data_url=image_data_url)
+    _validate_resume_session(store, thread_id)
+    if image_data_url is None:
+        return manager.resume_message(thread_id, message)
+    return manager.resume_message(thread_id, message, image_data_url=image_data_url)
+
+
 def _agent_repo_root() -> str:
     """Return the repository root used by the embedded Codex session."""
     from agent_oracle.agent_session import _REPO_ROOT
@@ -329,103 +364,56 @@ def _agent_repo_root() -> str:
 
 
 def _validate_resume_session(store: Store, thread_id: str) -> None:
-    """Reject thread IDs that are not archived Codex sessions for this repository."""
+    """Reject thread IDs that Codex cannot resume in this repository."""
+    _validate_agent_session(store, thread_id)
+    if is_codex_session_archived(thread_id):
+        raise HTTPException(status_code=422, detail="Session cannot be resumed in this repository")
+
+
+def _validate_agent_session(store: Store, thread_id: str) -> None:
+    """Reject thread IDs that are not readable Codex sessions for this repository."""
     session = store.get_session(thread_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Resumable Codex session not found")
-    if session.get("agent") != "codex" or session.get("cwd") != _agent_repo_root():
+    if (
+        session.get("agent") != "codex"
+        or session.get("cwd") != _agent_repo_root()
+        or session.get("is_review_agent", False)
+    ):
         raise HTTPException(status_code=422, detail="Session cannot be resumed in this repository")
 
 
 def _resumable_sessions(store: Store) -> list[dict[str, Any]]:
-    """Read every paginated archive row and keep eligible Codex sessions."""
-    candidates: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = store.list_sessions(limit=200, offset=offset)
-        candidates.extend(
-            session
-            for session in page
-            if session.get("agent") == "codex" and session.get("cwd") == _agent_repo_root()
-        )
-        if len(page) < 200:
-            return candidates
-        offset += len(page)
-
-
-def _source_messages(messages: list[Any], session_id: str) -> list[dict[str, Any]]:
-    """Convert locally parsed messages into the session-detail API shape."""
-    return [
-        {
-            "id": sequence,
-            "session_id": session_id,
-            "role": str(message.role),
-            "content": message.content,
-            "timestamp": message.timestamp.isoformat(),
-            "seq": sequence,
-            "is_thinking": int(message.is_thinking),
-            "model": message.model,
-            "is_system_instruction": int(message.is_system_instruction),
-            "is_injected": int(message.is_injected),
-        }
-        for sequence, message in enumerate(messages)
-    ]
+    """Read eligible Codex rows and exclude threads archived in Codex."""
+    candidates = store.list_sessions(limit=-1, agent="codex", cwd=_agent_repo_root())
+    archived_ids = archived_codex_session_ids({session["id"] for session in candidates})
+    return [session for session in candidates if session["id"] not in archived_ids]
 
 
 def _run_search(
-    store: Store, embedder: Embedder, query: str, mode: str, limit: int
+    store: Store,
+    embedder: Embedder,
+    query: str,
+    mode: str,
+    limit: int,
+    *,
+    agent: str | None = None,
+    entity: str | None = None,
 ) -> list[SearchResult]:
     """Run the store search for *mode*, embedding the query when required."""
     if mode == "text":
-        return store.search_text(query, limit=limit)
+        return store.search_text(query, limit=limit, agent=agent, entity=entity)
     query_embedding = embedder.embed_query(query)
     if mode == "vector":
-        return store.search_vector(query_embedding, limit=limit)
+        return store.search_vector(query_embedding, limit=limit, agent=agent, entity=entity)
     if mode == "hybrid":
-        return store.search_hybrid(query, query_embedding, limit=limit)
+        return store.search_hybrid(query, query_embedding, limit=limit, agent=agent, entity=entity)
     logger.warning("Unknown search mode %r, falling back to text", mode)
-    return store.search_text(query, limit=limit)
-
-
-def _filter_results(
-    store: Store,
-    results: list[SearchResult],
-    *,
-    agent: str | None,
-    entity: str | None,
-) -> list[SearchResult]:
-    """Drop results whose session does not match the agent or entity filters."""
-    if not agent and not entity:
-        return results
-    filtered: list[SearchResult] = []
-    for result in results:
-        session_id = result["session_id"]
-        if agent is not None and _session_agent(store, session_id) != agent:
-            continue
-        if entity is not None and not _has_entity(store, session_id, entity):
-            continue
-        filtered.append(result)
-    return filtered
-
-
-def _session_agent(store: Store, session_id: str) -> str | None:
-    """Return the agent type for *session_id*, or None if the session is missing."""
-    session = store.get_session(session_id)
-    return session.get("agent") if session else None
-
-
-def _has_entity(store: Store, session_id: str, entity: str) -> bool:
-    """Return True if any entity value for *session_id* equals *entity*."""
-    return any(entry.get("entity_value") == entity for entry in store.get_entities(session_id))
+    return store.search_text(query, limit=limit, agent=agent, entity=entity)
 
 
 def _group_by_session(results: list[SearchResult]) -> list[SearchResult]:
-    """Merge results that share a session_id, collecting all message snippets.
-
-    The store returns one row per matching message, so the same session can
-    appear multiple times.  This groups them, keeping the best score and
-    collecting all non-empty snippets into ``message_snippets``.
-    """
+    """Group ordered search hits, preserving the first (best) hit per session."""
     best: dict[str, SearchResult] = {}
     snippets: dict[str, list[str]] = {}
     for result in results:
@@ -433,18 +421,7 @@ def _group_by_session(results: list[SearchResult]) -> list[SearchResult]:
         snippet = result.get("snippet", "")
         if snippet:
             snippets.setdefault(sid, []).append(snippet)
-        if sid not in best:
-            best[sid] = result
-        else:
-            score = result.get("score", result.get("rank", result.get("distance")))
-            prev = best[sid]
-            prev_score = prev.get("score", prev.get("rank", prev.get("distance")))
-            if (
-                isinstance(score, (int, float))
-                and isinstance(prev_score, (int, float))
-                and score > prev_score
-            ):
-                best[sid] = result
+        best.setdefault(sid, result)
     return [{**r, "message_snippets": snippets.get(r["session_id"], [])} for r in best.values()]
 
 

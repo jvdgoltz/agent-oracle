@@ -1,26 +1,8 @@
 <script lang="ts">
-	import { getBehaviorStats, type BehaviorReport, type BehaviorSummary } from '$lib/api';
-
-	/** Signals exposed by OMP's user-metrics classifier. */
-	const SIGNALS: {
-		key: keyof BehaviorSummary;
-		rate: keyof BehaviorSummary;
-		label: string;
-		unit: string;
-	}[] = [
-		{ key: 'yelling', rate: 'yelling_rate', label: 'Yelling', unit: 'hits' },
-		{ key: 'profanity', rate: 'profanity_rate', label: 'Profanity', unit: 'hits' },
-		{ key: 'anguish', rate: 'anguish_rate', label: 'Anguish', unit: 'hits' },
-		{ key: 'negation', rate: 'negation_rate', label: 'Negation', unit: 'hits' },
-		{ key: 'repetition', rate: 'repetition_rate', label: 'Repetition', unit: 'hits' },
-		{ key: 'blame', rate: 'blame_rate', label: 'Blame', unit: 'hits' },
-		{
-			key: 'interruptions',
-			rate: 'interruption_rate',
-			label: 'Interruptions',
-			unit: 'interruptions'
-		}
-	];
+	import '$lib/stats.css';
+	import { getBehaviorStats, type BehaviorReport } from '$lib/api';
+	import BehaviorTable, { SIGNALS } from '$lib/BehaviorTable.svelte';
+	import ScrollableTable from '$lib/ScrollableTable.svelte';
 
 	let agent = $state('');
 	let start = $state('');
@@ -106,7 +88,7 @@
 	});
 </script>
 
-<section class="behavior">
+<section class="statistics behavior">
 	<div class="heading">
 		<div>
 			<h1>User behavior</h1>
@@ -127,7 +109,9 @@
 			<select bind:value={agent}>
 				<option value="">All agents</option><option value="codex">Codex</option><option
 					value="factory">Factory</option
-				><option value="claude">Claude</option><option value="omp">OMP</option>
+				><option value="claude">Claude</option><option value="omp">OMP</option><option value="pi"
+					>Pi</option
+				>
 			</select>
 		</label>
 		<label>From <input type="date" bind:value={start} /></label>
@@ -284,201 +268,57 @@
 					Normal rows use the previous eligible assistant response; interruptions use the
 					source-recorded model.
 				</p>
-				<div class="table-scroll">
-					<table>
-						<thead
-							><tr
-								><th>Model</th><th>Messages</th><th>Yelling</th><th>Profanity</th><th>Anguish</th
-								><th>Negation</th><th>Repetition</th><th>Blame</th><th>Interruptions</th><th
-									>Total</th
-								><th class="percentage">Percentage</th></tr
-							></thead
-						><tbody>
-							{#each report.models as row (row.model)}<tr
-									><td><code>{row.model}</code></td><td>{row.user_messages}</td><td
-										>{rate(row.yelling_rate)}</td
-									><td>{rate(row.profanity_rate)}</td><td>{rate(row.anguish_rate)}</td><td
-										>{rate(row.negation_rate)}</td
-									><td>{rate(row.repetition_rate)}</td><td>{rate(row.blame_rate)}</td><td
-										>{rate(row.interruption_rate)}</td
-									><td>{row.detected_messages}</td><td class="percentage"
-										>{rate(row.detection_rate)}</td
-									></tr
-								>{/each}
-						</tbody>
-					</table>
-				</div>
+				<ScrollableTable>
+					<BehaviorTable rows={report.models} field="model" label="Model" code />
+				</ScrollableTable>
 			</section>
 			<section>
 				<h2>By agent</h2>
-				<div class="table-scroll">
-					<table>
-						<thead
-							><tr
-								><th>Agent</th><th>Messages</th><th>Yelling</th><th>Profanity</th><th>Anguish</th
-								><th>Negation</th><th>Repetition</th><th>Blame</th><th>Interruptions</th><th
-									>Total</th
-								><th class="percentage">Percentage</th></tr
-							></thead
-						><tbody>
-							{#each report.agents as row (row.agent)}<tr
-									><td>{row.agent}</td><td>{row.user_messages}</td><td>{rate(row.yelling_rate)}</td
-									><td>{rate(row.profanity_rate)}</td><td>{rate(row.anguish_rate)}</td><td
-										>{rate(row.negation_rate)}</td
-									><td>{rate(row.repetition_rate)}</td><td>{rate(row.blame_rate)}</td><td
-										>{rate(row.interruption_rate)}</td
-									><td>{row.detected_messages}</td><td class="percentage"
-										>{rate(row.detection_rate)}</td
-									></tr
-								>{/each}
-						</tbody>
-					</table>
-				</div>
+				<ScrollableTable>
+					<BehaviorTable rows={report.agents} field="agent" label="Agent" />
+				</ScrollableTable>
 			</section>
 			<section>
 				<h2>By project</h2>
-				<div class="table-scroll">
-					<table>
-						<thead
-							><tr
-								><th>Project</th><th>Messages</th><th>Yelling</th><th>Profanity</th><th>Anguish</th
-								><th>Negation</th><th>Repetition</th><th>Blame</th><th>Interruptions</th><th
-									>Total</th
-								><th class="percentage">Percentage</th></tr
-							></thead
-						><tbody>
-							{#each report.projects as row (row.cwd)}<tr
-									><td><code>{row.cwd}</code></td><td>{row.user_messages}</td><td
-										>{rate(row.yelling_rate)}</td
-									><td>{rate(row.profanity_rate)}</td><td>{rate(row.anguish_rate)}</td><td
-										>{rate(row.negation_rate)}</td
-									><td>{rate(row.repetition_rate)}</td><td>{rate(row.blame_rate)}</td><td
-										>{rate(row.interruption_rate)}</td
-									><td>{row.detected_messages}</td><td class="percentage"
-										>{rate(row.detection_rate)}</td
-									></tr
-								>{/each}
-						</tbody>
-					</table>
-				</div>
+				<ScrollableTable>
+					<BehaviorTable rows={report.projects} field="cwd" label="Project" code />
+				</ScrollableTable>
 			</section>
 			<section>
 				<h2>Daily trend</h2>
-				<div class="table-scroll">
-					<table>
-						<thead
-							><tr
-								><th>Date</th><th>Messages</th><th>Yelling</th><th>Profanity</th><th>Anguish</th><th
-									>Negation</th
-								><th>Repetition</th><th>Blame</th><th>Interruptions</th><th>Total</th><th
-									class="percentage">Percentage</th
-								></tr
-							></thead
-						>
-						<tbody>
-							{#each report.daily as row (row.date)}
-								<tr
-									><td>{row.date}</td><td>{row.user_messages}</td><td>{rate(row.yelling_rate)}</td
-									><td>{rate(row.profanity_rate)}</td><td>{rate(row.anguish_rate)}</td><td
-										>{rate(row.negation_rate)}</td
-									><td>{rate(row.repetition_rate)}</td><td>{rate(row.blame_rate)}</td><td
-										>{rate(row.interruption_rate)}</td
-									><td>{row.detected_messages}</td><td class="percentage"
-										>{rate(row.detection_rate)}</td
-									></tr
-								>
-							{/each}
-						</tbody>
-					</table>
-				</div>
+				<ScrollableTable>
+					<BehaviorTable rows={report.daily} field="date" label="Date" />
+				</ScrollableTable>
 			</section>
 		</div>
 	{/if}
 </section>
 
 <style>
-	.behavior {
+	.context-strip {
 		display: grid;
-		gap: var(--s5);
+		gap: 1px;
+		grid-template-columns: repeat(4, 1fr);
+		overflow: hidden;
+		border: 1px solid var(--border);
+		border-radius: var(--r3);
+		background: var(--border);
 	}
-	.heading,
-	.filters,
-	.cards,
-	.context-strip,
-	.charts,
-	.tables {
-		display: flex;
-		gap: var(--s4);
+	.charts {
+		align-items: start;
 	}
-	.heading {
-		align-items: end;
-		justify-content: space-between;
-	}
-	h1,
-	h2,
 	p {
 		margin: 0;
 	}
-	h1 {
-		font-size: 22px;
-	}
 	h2 {
-		font-size: 15px;
-		margin-bottom: var(--s3);
-	}
-	p,
-	small,
-	.scope {
-		color: var(--muted);
+		margin: 0 0 var(--s3);
 	}
 	.table-note {
 		font-size: 12px;
 		margin-bottom: var(--s2);
 	}
-	.filters {
-		flex-wrap: wrap;
-	}
-	label {
-		display: grid;
-		gap: var(--s1);
-		color: var(--muted);
-		font-size: 12px;
-	}
-	select,
-	input {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--r2);
-		color: var(--text);
-		padding: var(--s2);
-	}
-	.cards {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-	}
-	.card {
-		display: grid;
-		gap: var(--s1);
-		padding: var(--s4);
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--r3);
-	}
 	.card strong {
 		font-size: 21px;
-		font-variant-numeric: tabular-nums;
-	}
-	.card small {
-		font-size: 11px;
-	}
-	.context-strip {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		gap: 1px;
-		overflow: hidden;
-		border: 1px solid var(--border);
-		border-radius: var(--r3);
-		background: var(--border);
 	}
 	.context-strip > div {
 		display: grid;
@@ -495,79 +335,33 @@
 		font-size: 18px;
 		font-variant-numeric: tabular-nums;
 	}
-	.charts {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		align-items: start;
-	}
 	.chart-card {
-		min-width: 0;
 		align-self: start;
-		padding: var(--s4);
-		background: linear-gradient(160deg, var(--surface), var(--bg));
-		border: 1px solid var(--border);
-		border-radius: var(--r3);
-	}
-	.section-heading {
-		display: flex;
-		align-items: start;
-		justify-content: space-between;
-		gap: var(--s3);
-		margin-bottom: var(--s4);
 	}
 	.section-heading h2 {
 		margin-bottom: var(--s2);
 	}
-	.section-heading p {
-		margin: 0;
+	.bar-label {
+		justify-content: space-between;
 		font-size: 11px;
 	}
-	.chart-total {
-		color: var(--accent);
-		font-size: 11px;
-		white-space: nowrap;
-	}
-	.bar-list {
-		display: grid;
-		gap: var(--s3);
-	}
-	.bar-row {
-		display: grid;
-		gap: var(--s1);
-	}
-	.bar-label,
 	.bar-meta {
 		display: flex;
 		justify-content: space-between;
 		gap: var(--s2);
 		min-width: 0;
-		font-size: 11px;
+		font-size: 10px;
+		color: var(--muted);
 	}
 	.bar-label span {
 		color: var(--muted);
 		font-variant-numeric: tabular-nums;
 	}
-	.bar-label code {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
 	.track {
 		height: 8px;
-		overflow: hidden;
-		border-radius: 99px;
-		background: var(--elevated);
 	}
 	.bar {
-		display: block;
-		height: 100%;
-		min-width: 0;
-		border-radius: inherit;
 		background: linear-gradient(90deg, var(--accent), #a78bfa);
-	}
-	.bar-meta {
-		color: var(--muted);
-		font-size: 10px;
 	}
 	.trend-wrap {
 		display: grid;
@@ -666,48 +460,11 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.empty {
-		padding: var(--s5) 0;
 		color: var(--muted);
-		text-align: center;
-	}
-	.tables {
-		align-items: start;
-		flex-wrap: wrap;
-	}
-	.tables section {
-		flex: 1 1 350px;
-	}
-	table {
-		width: 100%;
-		border-collapse: collapse;
-	}
-	.table-scroll {
-		overflow-x: auto;
-	}
-	th,
-	td {
-		padding: var(--s2);
-		border-bottom: 1px solid var(--border);
-		text-align: left;
-	}
-	th {
-		color: var(--muted);
-		font-size: 12px;
-		font-weight: 500;
-	}
-	.percentage {
-		font-weight: 700;
 	}
 	@media (max-width: 640px) {
 		.context-strip {
 			grid-template-columns: repeat(2, 1fr);
-		}
-		.charts {
-			grid-template-columns: 1fr;
-		}
-		.heading {
-			align-items: start;
-			flex-direction: column;
 		}
 	}
 </style>

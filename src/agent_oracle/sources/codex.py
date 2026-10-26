@@ -13,39 +13,66 @@ Each line is a JSON object with ``type`` and ``payload`` fields:
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session
+from agent_oracle.models import AgentType, Interruption, Message, MessageRole, Session, TokenUsage
 from agent_oracle.sources.common import (
     MESSAGE_ROLES,
+    is_injected_message,
     iter_lines,
     normalize_title,
     parse_jsonl_line,
     parse_timestamp,
 )
 
-#: Content tags that mark a user message as injected context rather than real input.
-_INJECTED_TAGS = (
-    "<system-reminder>",
-    "<permissions instructions>",
-    "<collaboration_mode>",
-    "<recommended_plugins>",
-    "<turn_aborted>",
-)
+
+def find_codex_session_path(session_id: str, sessions_root: Path | None = None) -> Path | None:
+    """Find an active or archived Codex JSONL by its stable thread ID."""
+    roots = (
+        (sessions_root,)
+        if sessions_root is not None
+        else (
+            Path.home() / ".codex" / "sessions",
+            Path.home() / ".codex" / "archived_sessions",
+        )
+    )
+    for root in roots:
+        for path in root.rglob(f"*-{session_id}.jsonl"):
+            return path
+    return None
+
+
+def is_codex_session_archived(session_id: str) -> bool:
+    """Return whether Codex moved a thread into its archived session directory."""
+    path = find_codex_session_path(session_id)
+    archive_root = Path.home() / ".codex" / "archived_sessions"
+    return path is not None and path.is_relative_to(archive_root)
+
+
+def archived_codex_session_ids(session_ids: set[str]) -> set[str]:
+    """Return candidate thread IDs whose JSONL is in the Codex archive."""
+    archive_root = Path.home() / ".codex" / "archived_sessions"
+    filenames = [path.name for path in archive_root.rglob("*.jsonl")]
+    return {
+        session_id
+        for session_id in session_ids
+        if any(name.endswith(f"-{session_id}.jsonl") for name in filenames)
+    }
 
 
 def load_codex_session(session_id: str, sessions_root: Path | None = None) -> Session | None:
-    """Load one local Codex session JSONL by its stable thread ID."""
-    root = sessions_root or Path.home() / ".codex" / "sessions"
-    for path in root.rglob(f"*-{session_id}.jsonl"):
+    """Load one active or archived Codex session by its stable thread ID."""
+    path = find_codex_session_path(session_id, sessions_root)
+    if path is not None:
         session = parse_codex_session(path)
         if session.id == session_id:
             return session
     return None
 
 
-def parse_codex_session(path: Path) -> Session:
+def parse_codex_session(path: Path) -> Session:  # noqa: C901
     """Parse a Codex JSONL session file into a :class:`Session`."""
     session_id = path.stem
     cwd = ""
@@ -53,6 +80,9 @@ def parse_codex_session(path: Path) -> Session:
     messages: list[Message] = []
     interruptions: list[Interruption] = []
     current_model: str | None = None
+    parent_thread_id: str | None = None
+    is_review_agent = False
+    token_usages: list[TokenUsage] = []
 
     for line in iter_lines(path):
         record = parse_jsonl_line(line)
@@ -66,6 +96,13 @@ def parse_codex_session(path: Path) -> Session:
             session_id = payload.get("id", session_id)
             cwd = payload.get("cwd", "")
             started_at = parse_timestamp(payload.get("timestamp", "")) or started_at
+            parent_thread_id = payload.get("parent_thread_id")
+            source = payload.get("source")
+            is_review_agent = (
+                isinstance(source, dict)
+                and isinstance(source.get("subagent"), dict)
+                and source["subagent"].get("other") == "guardian"
+            )
         elif record_type == "turn_context":
             current_model = payload.get("model", current_model)
         elif (
@@ -82,6 +119,20 @@ def parse_codex_session(path: Path) -> Session:
                     user_message_seq=_last_user_message_seq(messages),
                 )
             )
+        elif record_type == "event_msg" and payload.get("type") == "token_count":
+            info = (payload.get("info") or {}).get("last_token_usage", {})
+            if info:
+                token_usages.append(
+                    TokenUsage(
+                        timestamp=timestamp,
+                        model=current_model,
+                        input_tokens=info.get("input_tokens"),
+                        output_tokens=info.get("output_tokens"),
+                        cached_input_tokens=info.get("cached_input_tokens"),
+                        reasoning_output_tokens=info.get("reasoning_output_tokens"),
+                        total_tokens=info.get("total_tokens"),
+                    )
+                )
         elif record_type == "response_item":
             msg = _extract_message(payload, timestamp, current_model)
             if msg is not None:
@@ -98,12 +149,18 @@ def parse_codex_session(path: Path) -> Session:
         started_at=started_at,
         messages=messages,
         interruptions=interruptions,
+        token_usages=token_usages,
+        parent_thread_id=parent_thread_id,
+        is_review_agent=is_review_agent,
     )
 
 
 def _read_codex_title(path: Path, session_id: str) -> str | None:
     """Read the latest Codex thread name, falling back to state metadata."""
-    sessions_root = next((parent for parent in path.parents if parent.name == "sessions"), None)
+    sessions_root = next(
+        (parent for parent in path.parents if parent.name in {"sessions", "archived_sessions"}),
+        None,
+    )
     if sessions_root is None:
         return None
     codex_home = sessions_root.parent
@@ -120,7 +177,7 @@ def _read_codex_title(path: Path, session_id: str) -> str | None:
     if not state_path.exists():
         return None
     try:
-        with sqlite3.connect(f"file:{state_path}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(f"file:{state_path}?mode=ro", uri=True)) as connection:
             row = connection.execute(
                 "SELECT name, title FROM threads WHERE id = ?", (session_id,)
             ).fetchone()
@@ -158,7 +215,7 @@ def _extract_message(payload: dict, timestamp: datetime, model: str | None) -> M
     # Model is only for assistant messages (including reasoning/thinking)
     msg_model = model if role is MessageRole.ASSISTANT else None
     is_system = role is MessageRole.DEVELOPER
-    is_injected = role is MessageRole.USER and text.startswith(_INJECTED_TAGS)
+    is_injected = role is MessageRole.USER and is_injected_message(text)
 
     return Message(
         role=role,

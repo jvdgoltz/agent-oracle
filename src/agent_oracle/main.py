@@ -87,12 +87,18 @@ async def _lifespan(app: FastAPI):
     _start_background_indexing(_watcher)
     try:
         async with _mcp_app.lifespan(app):
+            try:
+                recovered = app.state.agent_manager.recover_interrupted()
+                if recovered is not None:
+                    logger.info("Recovered interrupted agent thread %s", recovered.thread_id)
+            except Exception:
+                logger.error("Failed to recover interrupted agent turn", exc_info=True)
             yield
     finally:
         _watcher.stop()
 
 
-app: FastAPI = create_app(_store, _embedder, summarizer=_summarizer)
+app: FastAPI = create_app(_store, _embedder, summarizer=_summarizer, watcher=_watcher)
 app.router.lifespan_context = _lifespan
 app.mount("/mcp", _mcp_app)
 

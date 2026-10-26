@@ -26,6 +26,12 @@ Whenever making changes to the backend, test the affected endpoints by calling
 them (e.g. via `curl http://localhost:8731/api/...`) and the MCP endpoints.
 Do not rely on unit tests alone to verify backend behavior.
 
+### End-to-end verification
+For changes that affect the running application, verify the live REST API and
+MCP protocol with direct calls, then use a browser to exercise the relevant UI
+flow and confirm the visible result. Unit, integration, and frontend checks do
+not replace this end-to-end verification.
+
 ### Running services
 Both the backend and frontend are managed by `launchd` and may already be
 running in the background. Before starting either service manually, check
@@ -74,6 +80,8 @@ script in the repository root installs, loads, and starts both services.
 - Implement the basic happy path of any functionality or feature first. Only after confirmation from the user, implement the edge cases.
 - Only implement features and functionality that the user asked for.
 - Use red/green TDD.
+- Migration tests must execute the real backup path under the intended transaction and locking
+  arrangement, not only inspect backup existence.
 - If stuck after 2 failed implementation attempts, stop and present a blocker summary with concrete next options.
 - Before handoff, run the smallest relevant tests/lint for touched code and report pass/fail explicitly.
 - Self-improvement: If the user corrects a mistake or gives feedback, suggest a change to the `AGENTS.md` to prevent the same mistake from happening again.

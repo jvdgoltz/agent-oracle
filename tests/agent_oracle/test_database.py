@@ -4,7 +4,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from agent_oracle.database import StoreDatabase, serialized
-from agent_oracle.store import Store
 
 
 class _Probe(StoreDatabase):
@@ -38,30 +37,3 @@ def test_operations_cannot_interleave(tmp_path) -> None:
         second.result()
     assert observed.is_set()
     db.conn.close()
-
-
-def test_init_creates_tables(store: Store) -> None:
-    """All expected tables exist after initialization."""
-    names = {
-        r[0]
-        for r in store.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type IN ('table','index')"
-        ).fetchall()
-    }
-    assert "sessions" in names
-    assert "messages" in names
-    assert "messages_fts" in names
-    assert "sessions_fts" in names
-    assert "vec_sessions" in names
-    assert "vec_messages" in names
-    assert "entities" in names
-
-
-def test_init_creates_indexes(store: Store) -> None:
-    """Indexes on session_id exist for messages and entities."""
-    names = {
-        r[0]
-        for r in store.conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
-    }
-    assert "idx_messages_session_id" in names
-    assert "idx_entities_session_id" in names

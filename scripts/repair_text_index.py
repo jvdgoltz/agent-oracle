@@ -32,7 +32,9 @@ def repair(path: Path) -> Path:
             conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
             conn.execute(
                 "INSERT INTO messages_fts(rowid, content) SELECT id, content FROM messages "
-                "WHERE NOT is_thinking AND NOT is_system_instruction AND NOT is_injected"
+                "WHERE role IN ('user', 'assistant') AND NOT is_thinking "
+                "AND NOT is_system_instruction AND NOT is_injected "
+                "AND session_id IN (SELECT id FROM sessions WHERE NOT is_review_agent)"
             )
             conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('integrity-check')")
         logger.info("Repaired message FTS without reparsing, embedding, or enriching sessions")

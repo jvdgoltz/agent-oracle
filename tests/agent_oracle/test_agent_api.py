@@ -81,6 +81,48 @@ def test_agent_empty_message_is_unprocessable() -> None:
     assert response.status_code == 422
 
 
+def test_agent_rejects_invalid_image_data_url() -> None:
+    """Agent turns reject unsupported image payloads before invoking Codex."""
+    manager = MagicMock()
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Inspect", "image_data_url": "data:text/plain;base64,AAAA"},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
+def test_agent_rejects_malformed_image_data_url() -> None:
+    """Agent turns reject malformed Base64 before invoking Codex."""
+    manager = MagicMock()
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Inspect", "image_data_url": "data:image/png;base64,===="},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
+def test_agent_rejects_image_data_url_with_mismatched_content() -> None:
+    """Agent turns reject valid Base64 bytes declared as the wrong image type."""
+    manager = MagicMock()
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Inspect", "image_data_url": "data:image/png;base64,R0lGODlh"},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
 def test_agent_resume_requires_a_matching_archived_codex_session() -> None:
     """Resume IDs are validated before the manager can invoke Codex."""
     store = MagicMock()
@@ -111,6 +153,47 @@ def test_agent_resume_rejects_unknown_session() -> None:
     manager.start.assert_not_called()
 
 
+def test_agent_resume_rejects_review_sessions() -> None:
+    """Guardian review sessions remain read-only archive children."""
+    store = MagicMock()
+    store.get_session.return_value = {
+        "agent": "codex",
+        "cwd": "/Users/jvdgoltz/Projects/agent-oracle",
+        "is_review_agent": True,
+    }
+    manager = MagicMock()
+    app = create_app(store, MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Resume", "resume_thread_id": "review-thread"},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
+def test_agent_resume_rejects_a_codex_archived_session(monkeypatch) -> None:
+    """Codex archived threads cannot be resumed from Agent Oracle."""
+    store = MagicMock()
+    store.get_session.return_value = {
+        "agent": "codex",
+        "cwd": _agent_repo_root(),
+        "is_review_agent": False,
+    }
+    monkeypatch.setattr("agent_oracle.api.is_codex_session_archived", lambda _: True)
+    manager = MagicMock()
+    app = create_app(store, MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).post(
+        "/api/agent/sessions",
+        json={"message": "Resume", "resume_thread_id": "archived-thread"},
+    )
+
+    assert response.status_code == 422
+    manager.start.assert_not_called()
+
+
 def test_archived_agent_session_loads_source_transcript_without_starting_codex(
     monkeypatch,
 ) -> None:
@@ -138,6 +221,7 @@ def test_archived_agent_session_loads_source_transcript_without_starting_codex(
         ],
     )
     monkeypatch.setattr("agent_oracle.api.load_codex_session", lambda _: source)
+    monkeypatch.setattr("agent_oracle.api.is_codex_session_archived", lambda _: True)
     app = create_app(store, MagicMock(), agent_manager=manager)
 
     response = TestClient(app).get("/api/agent/sessions/saved-thread")
@@ -145,6 +229,18 @@ def test_archived_agent_session_loads_source_transcript_without_starting_codex(
     assert response.status_code == 200
     assert response.json()["messages"][0]["content"] == "Stored reply"
     manager.start.assert_not_called()
+
+
+def test_active_recovered_session_keeps_the_browser_on_the_event_stream() -> None:
+    """A full browser reload does not render an active recovered turn as archived."""
+    manager = MagicMock()
+    manager.is_running.return_value = True
+    app = create_app(MagicMock(), MagicMock(), agent_manager=manager)
+
+    response = TestClient(app).get("/api/agent/sessions/saved-thread")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "agent session is still running"}
 
 
 def test_archived_agent_follow_up_resumes_after_a_server_reload() -> None:
@@ -186,19 +282,17 @@ def test_live_agent_follow_up_does_not_require_archive_lookup() -> None:
     store.get_session.assert_not_called()
 
 
-def test_resume_candidates_read_past_the_first_page() -> None:
-    """All archived pages are inspected instead of silently truncating at 200."""
+def test_resume_candidates_query_all_eligible_sessions() -> None:
+    """The database selects eligible sessions without scanning unrelated pages."""
     store = MagicMock()
-    first_page = [{"id": str(index), "agent": "claude", "cwd": "/tmp"} for index in range(200)]
-    second_page = [{"id": "keep", "agent": "codex", "cwd": _agent_repo_root()}]
-    store.list_sessions.side_effect = [first_page, second_page]
+    store.list_sessions.return_value = [{"id": "keep", "agent": "codex", "cwd": _agent_repo_root()}]
     app = create_app(store, MagicMock(), agent_manager=MagicMock())
 
     response = TestClient(app).get("/api/agent/sessions")
 
     assert response.status_code == 200
     assert [session["id"] for session in response.json()["sessions"]] == ["keep"]
-    assert store.list_sessions.call_args_list[1].kwargs == {"limit": 200, "offset": 200}
+    store.list_sessions.assert_called_once_with(limit=-1, agent="codex", cwd=_agent_repo_root())
 
 
 def test_sse_disconnect_leaves_agent_turn_running() -> None:
@@ -235,14 +329,16 @@ def test_agent_events_return_a_real_sse_response() -> None:
     assert '"delta": "Hello"' in response.text
 
 
-def test_agent_resume_candidates_only_include_this_codex_repository() -> None:
-    """Only archived Codex threads from the current repository are resumable."""
+def test_agent_resume_candidates_only_include_active_codex_in_this_repository(
+    monkeypatch,
+) -> None:
+    """Only active Codex threads from the current repository are resumable."""
     store = MagicMock()
     store.list_sessions.return_value = [
         {"id": "keep", "agent": "codex", "cwd": _agent_repo_root()},
-        {"id": "other-agent", "agent": "claude", "cwd": _agent_repo_root()},
-        {"id": "other-repo", "agent": "codex", "cwd": "/tmp/other"},
+        {"id": "archived", "agent": "codex", "cwd": _agent_repo_root()},
     ]
+    monkeypatch.setattr("agent_oracle.api.archived_codex_session_ids", lambda _: {"archived"})
     app = create_app(store, MagicMock(), agent_manager=MagicMock())
 
     response = TestClient(app).get("/api/agent/sessions")

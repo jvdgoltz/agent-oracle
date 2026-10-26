@@ -47,6 +47,27 @@ def test_build_prompt_contains_message_content() -> None:
     assert "fix the bug" in prompt
 
 
+def test_build_prompt_excludes_non_conversation_messages() -> None:
+    """Enrichment receives ordinary turns but no system, developer, or injected text."""
+    ts = datetime.now(UTC)
+    session = _make_session(["ordinary user"])
+    session = Session(
+        id=session.id,
+        agent=session.agent,
+        cwd=session.cwd,
+        started_at=session.started_at,
+        messages=[
+            Message(MessageRole.SYSTEM, "system secret", ts),
+            Message(MessageRole.DEVELOPER, "developer secret", ts),
+            Message(MessageRole.USER, "injected secret", ts, is_injected=True),
+            *session.messages,
+        ],
+    )
+    prompt = Enricher(api_key="test-key")._build_prompt(session)
+    assert "ordinary user" in prompt
+    assert "secret" not in prompt
+
+
 def test_enrich_with_mocked_client() -> None:
     """Enrichment supplies a Pydantic schema and maps the parsed result."""
     session = _make_session(["let's build a search engine"])

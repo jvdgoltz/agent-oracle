@@ -34,4 +34,4 @@ Hard, non-negotiable conventions for this repository. They apply to humans and a
 
 ## Indexed content
 
-- Sessions include user, assistant, thinking, system, developer, and injected-instruction messages. Tool calls and tool results are agent traffic, not conversation, and are never added to the index.
+- Sessions retain user, assistant, thinking, system, developer, and injected-instruction messages for detail views. Only ordinary user and assistant turns are indexed, embedded, or sent to enrichment; thinking, system, developer, and injected-instruction messages are excluded. Tool calls and tool results are agent traffic, not conversation, and are never added to the index.

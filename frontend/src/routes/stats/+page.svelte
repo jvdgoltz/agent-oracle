@@ -1,5 +1,12 @@
 <script lang="ts">
-	import { getOverviewStats, type OverviewReport } from '$lib/api';
+	import '$lib/stats.css';
+	import {
+		getOverviewStats,
+		getTokenUsageStats,
+		type OverviewReport,
+		type TokenUsageReport
+	} from '$lib/api';
+	import ScrollableTable from '$lib/ScrollableTable.svelte';
 
 	let agent = $state('');
 	let start = $state('');
@@ -7,12 +14,14 @@
 	let report = $state<OverviewReport | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let tokenReport = $state<TokenUsageReport | null>(null);
 
 	const agentColors: Record<string, string> = {
 		codex: 'var(--codex-color)',
 		factory: 'var(--factory-color)',
 		claude: 'var(--claude-color)',
-		omp: 'var(--omp-color)'
+		omp: 'var(--omp-color)',
+		pi: '#c0a0ff'
 	};
 
 	/** Format an elapsed duration in concise human-readable units. */
@@ -27,7 +36,11 @@
 		loading = true;
 		error = null;
 		try {
-			report = await getOverviewStats(agent || undefined, start || undefined, end || undefined);
+			const filters = [agent || undefined, start || undefined, end || undefined] as const;
+			[report, tokenReport] = await Promise.all([
+				getOverviewStats(...filters),
+				getTokenUsageStats(...filters)
+			]);
 		} catch (exception) {
 			error = exception instanceof Error ? exception.message : 'Failed to load overview statistics';
 		} finally {
@@ -40,6 +53,32 @@
 		return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(
 			value
 		);
+	}
+
+	/** Format a provider token count in millions while preserving unavailable values. */
+	function tokenMillions(value: number | null): string {
+		return value === null ? '—' : `${(value / 1_000_000).toFixed(1)}M`;
+	}
+
+	/** Format a cache hit rate without inventing unavailable telemetry. */
+	function cacheHitRate(value: number | null): string {
+		return value === null ? '—' : `${value.toFixed(1)}%`;
+	}
+
+	/** Return cache tokens reported either as an input subset or separate cache operations. */
+	function cacheTokens(row: TokenUsageReport['agent_model'][number]): number | null {
+		const values = [
+			row.cached_input_tokens,
+			row.cache_creation_input_tokens,
+			row.cache_read_input_tokens
+		].filter((value): value is number => value !== null);
+		return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+	}
+
+	/** Normalize input to exclude cache tokens that a provider includes in its input count. */
+	function uncachedInputTokens(row: TokenUsageReport['agent_model'][number]): number | null {
+		if (row.input_tokens === null) return null;
+		return Math.max(0, row.input_tokens - (row.cached_input_tokens ?? 0));
 	}
 
 	/** Return a safe percentage for a horizontal bar. */
@@ -70,7 +109,7 @@
 	});
 </script>
 
-<section class="overview">
+<section class="statistics overview">
 	<div class="heading">
 		<div>
 			<h1>Archive overview</h1>
@@ -90,7 +129,9 @@
 			>Agent <select bind:value={agent}
 				><option value="">All agents</option><option value="codex">Codex</option><option
 					value="factory">Factory</option
-				><option value="claude">Claude</option><option value="omp">OMP</option></select
+				><option value="claude">Claude</option><option value="omp">OMP</option><option value="pi"
+					>Pi</option
+				></select
 			></label
 		>
 		<label>From <input type="date" bind:value={start} /></label>
@@ -122,6 +163,55 @@
 				><small>{duration(report.totals.median_session_duration_seconds)} elapsed</small>
 			</div>
 		</div>
+
+		{#if tokenReport}
+			<section class="chart-card wide-chart token-usage">
+				<div class="section-heading">
+					<div>
+						<h2>Token consumption</h2>
+						<p>Provider-reported usage; unavailable fields remain blank.</p>
+					</div>
+				</div>
+				<ScrollableTable
+					><table>
+						<thead
+							><tr
+								><th>Agent</th><th>Model</th><th>Responses</th><th>Uncached input</th><th>Cache</th
+								><th>Cache hit rate</th><th>Output</th><th>Total</th></tr
+							></thead
+						>
+						<tbody
+							>{#each tokenReport.agent_model as row (`${row.agent}:${row.model}`)}
+								<tr
+									><td>{row.agent}</td><td><code>{row.model}</code></td><td>{row.responses}</td><td
+										>{tokenMillions(uncachedInputTokens(row))}</td
+									><td>{tokenMillions(cacheTokens(row))}</td><td
+										>{cacheHitRate(row.cache_hit_rate)}</td
+									><td>{tokenMillions(row.output_tokens)}</td><td
+										>{tokenMillions(row.total_tokens)}</td
+									></tr
+								>
+							{/each}</tbody
+						>
+					</table></ScrollableTable
+				>
+				<h3>Cache hit rate by agent</h3>
+				<ScrollableTable
+					><table>
+						<thead><tr><th>Agent</th><th>Responses</th><th>Cache hit rate</th></tr></thead>
+						<tbody>
+							{#each tokenReport.agents as row (row.agent)}
+								<tr
+									><td>{row.agent}</td><td>{row.responses}</td><td
+										>{cacheHitRate(row.cache_hit_rate)}</td
+									></tr
+								>
+							{/each}
+						</tbody>
+					</table></ScrollableTable
+				>
+			</section>
+		{/if}
 
 		<div class="charts">
 			<section class="chart-card">
@@ -209,37 +299,43 @@
 		<div class="tables">
 			<section>
 				<h2>Sessions by agent</h2>
-				<table>
-					<thead><tr><th>Agent</th><th>Sessions</th></tr></thead><tbody
-						>{#each report.agents as row (row.agent)}<tr
-								><td>{row.agent}</td><td>{row.sessions}</td></tr
-							>{/each}</tbody
-					>
-				</table>
+				<ScrollableTable
+					><table>
+						<thead><tr><th>Agent</th><th>Sessions</th></tr></thead><tbody
+							>{#each report.agents as row (row.agent)}<tr
+									><td>{row.agent}</td><td>{row.sessions}</td></tr
+								>{/each}</tbody
+						>
+					</table></ScrollableTable
+				>
 			</section>
 			<section>
 				<h2>Sessions by project</h2>
-				<table>
-					<thead><tr><th>Project</th><th>Sessions</th></tr></thead><tbody
-						>{#each report.projects as row (row.cwd)}<tr
-								><td><code>{row.cwd}</code></td><td>{row.sessions}</td></tr
-							>{/each}</tbody
-					>
-				</table>
+				<ScrollableTable
+					><table>
+						<thead><tr><th>Project</th><th>Sessions</th></tr></thead><tbody
+							>{#each report.projects as row (row.cwd)}<tr
+									><td><code>{row.cwd}</code></td><td>{row.sessions}</td></tr
+								>{/each}</tbody
+						>
+					</table></ScrollableTable
+				>
 			</section>
 			<section>
 				<h2>Messages by model</h2>
-				<table>
-					<thead><tr><th>Model</th><th>Messages</th></tr></thead><tbody
-						>{#each report.models as row (row.model)}<tr
-								><td><code>{row.model}</code></td><td>{row.messages}</td></tr
-							>{/each}</tbody
-					>
-				</table>
+				<ScrollableTable
+					><table>
+						<thead><tr><th>Model</th><th>Messages</th></tr></thead><tbody
+							>{#each report.models as row (row.model)}<tr
+									><td><code>{row.model}</code></td><td>{row.messages}</td></tr
+								>{/each}</tbody
+						>
+					</table></ScrollableTable
+				>
 			</section>
 			<section>
 				<h2>Sessions by entity</h2>
-				<div class="scroll">
+				<ScrollableTable>
 					<table>
 						<thead><tr><th>Type</th><th>Entity</th><th>Sessions</th></tr></thead><tbody
 							>{#each report.entities as row (`${row.entity_type}:${row.entity_value}`)}<tr
@@ -249,12 +345,12 @@
 								>{/each}</tbody
 						>
 					</table>
-				</div>
+				</ScrollableTable>
 			</section>
 			<section class="wide">
 				<h2>Session length</h2>
 				<p>Visible user and assistant messages; elapsed from first to last message.</p>
-				<div class="scroll">
+				<ScrollableTable>
 					<table>
 						<thead
 							><tr
@@ -268,79 +364,25 @@
 								>{/each}</tbody
 						>
 					</table>
-				</div>
+				</ScrollableTable>
 			</section>
 		</div>
 	{/if}
 </section>
 
 <style>
-	.overview {
-		display: grid;
-		gap: var(--s5);
-	}
-	.heading,
-	.filters,
-	.cards,
-	.charts,
-	.tables {
-		display: flex;
-		gap: var(--s4);
-	}
-	.heading {
-		align-items: end;
-		justify-content: space-between;
-	}
-	h1,
-	h2,
-	p {
-		margin: 0;
-	}
-	h1 {
-		font-size: 22px;
-	}
 	h2 {
-		font-size: 15px;
-		margin-bottom: var(--s2);
-	}
-	p,
-	small,
-	.scope {
-		color: var(--muted);
+		margin: 0 0 var(--s2);
 	}
 	p {
 		font-size: 12px;
-		margin-bottom: var(--s2);
+		margin: 0 0 var(--s2);
 	}
-	.filters,
-	.tables {
-		flex-wrap: wrap;
-	}
-	label {
-		display: grid;
-		gap: var(--s1);
-		color: var(--muted);
-		font-size: 12px;
-	}
-	select,
-	input {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--r2);
-		color: var(--text);
-		padding: var(--s2);
-	}
-	.cards {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+	h3 {
+		margin: var(--s4) 0 var(--s2);
+		font-size: 13px;
 	}
 	.card {
-		display: grid;
-		gap: var(--s1);
-		padding: var(--s4);
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--r3);
 		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
 	}
 	.card.accent {
@@ -349,59 +391,18 @@
 	}
 	.card strong {
 		font-size: 20px;
-		font-variant-numeric: tabular-nums;
-	}
-	.card small {
-		font-size: 11px;
-	}
-	.charts {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-	.chart-card {
-		min-width: 0;
-		padding: var(--s4);
-		background: linear-gradient(160deg, var(--surface), var(--bg));
-		border: 1px solid var(--border);
-		border-radius: var(--r3);
 	}
 	.wide-chart {
 		grid-column: 1 / -1;
 	}
-	.section-heading {
-		display: flex;
-		align-items: start;
-		justify-content: space-between;
-		gap: var(--s3);
-		margin-bottom: var(--s4);
-	}
-	.section-heading p {
-		margin: 0;
-		font-size: 11px;
-	}
 	.chart-total {
-		color: var(--accent);
-		font-size: 11px;
 		font-variant-numeric: tabular-nums;
-		white-space: nowrap;
-	}
-	.bar-list {
-		display: grid;
-		gap: var(--s3);
-	}
-	.bar-row {
-		display: grid;
-		gap: var(--s1);
 	}
 	.bar-label {
-		display: flex;
 		align-items: center;
-		gap: var(--s2);
-		min-width: 0;
 		font-size: 12px;
 	}
-	.bar-label span:not(.dot),
-	.bar-label code {
+	.bar-label span:not(.dot) {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -421,15 +422,6 @@
 	}
 	.track {
 		height: 7px;
-		overflow: hidden;
-		border-radius: 99px;
-		background: var(--elevated);
-	}
-	.bar {
-		display: block;
-		height: 100%;
-		min-width: 0;
-		border-radius: inherit;
 	}
 	.model-bar {
 		background: linear-gradient(90deg, var(--accent), #a78bfa);
@@ -472,47 +464,15 @@
 		border-radius: var(--r2) var(--r2) 0 0;
 		background: linear-gradient(180deg, var(--accent), #5b6da8);
 	}
-	.empty {
-		padding: var(--s5) 0;
-		text-align: center;
-	}
-	.tables {
-		align-items: start;
-	}
-	.tables section {
-		flex: 1 1 350px;
-	}
 	.tables .wide {
 		flex-basis: 100%;
 	}
-	table {
-		width: 100%;
-		border-collapse: collapse;
-	}
-	th,
 	td {
-		padding: var(--s2);
-		border-bottom: 1px solid var(--border);
-		text-align: left;
 		font-size: 12px;
 	}
-	th {
-		color: var(--muted);
-		font-weight: 500;
-	}
-	.scroll {
-		overflow-x: auto;
-	}
 	@media (max-width: 640px) {
-		.charts {
-			grid-template-columns: 1fr;
-		}
 		.wide-chart {
 			grid-column: auto;
-		}
-		.heading {
-			align-items: start;
-			flex-direction: column;
 		}
 	}
 </style>

@@ -13,7 +13,7 @@ dependencies = [
     "pydantic==2.13.4",
     "python-dotenv>=1.2.2",
     "sqlite-vec>=0.1.9",
-    "uvicorn[standard]>=0.50.0",
+    "uvicorn[standard]>=0.50.2",
     "watchdog>=6.0.0",
 ]
 
@@ -91,4 +91,6 @@ respect-type-ignore-comments = true
 
 [tool.uv]
 exclude-newer = "7 days"
+# Security fixes (eMudhra CA incident) bypass the cooldown.
+exclude-newer-package = { certifi = false }
 constraint-dependencies = ["fastmcp-slim==4.0.0b1"]

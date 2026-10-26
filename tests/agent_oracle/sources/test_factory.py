@@ -185,6 +185,25 @@ def test_parse_records_cancelled_turn(tmp_path: Path) -> None:
     ]
 
 
+def test_parse_marks_shared_generated_prefix_injected(tmp_path: Path) -> None:
+    """Factory shared envelope markers are injected alongside native visibility flags."""
+    session = parse_factory_session(
+        _write_jsonl(
+            tmp_path,
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "<realtime_delegation>"}],
+                    },
+                }
+            ],
+        )
+    )
+    assert session.messages[0].is_injected is True
+
+
 def test_parse_deduplicates_cancelled_turn_and_ignores_injected_messages(tmp_path: Path) -> None:
     """Factory links a cancelled turn to its real user message exactly once."""
     session = parse_factory_session(

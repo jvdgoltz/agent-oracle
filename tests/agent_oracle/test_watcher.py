@@ -2,6 +2,7 @@
 
 import json
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,7 @@ from watchdog.events import FileModifiedEvent
 from agent_oracle import watcher as watcher_module
 from agent_oracle.embed import Embedder
 from agent_oracle.enrich import Enricher, EnrichmentResult, Entity
-from agent_oracle.models import AgentType, Session
+from agent_oracle.models import AgentType, Message, MessageRole, Session
 from agent_oracle.sources.claude import parse_claude_session
 from agent_oracle.sources.codex import parse_codex_session
 from agent_oracle.sources.factory import parse_factory_session
@@ -20,18 +21,21 @@ from agent_oracle.store import Store
 from agent_oracle.watcher import _HOME, SessionWatcher
 
 
+def _write_records(path: Path, records: list[dict]) -> None:
+    """Write fixture records as newline-delimited JSON."""
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+
+
 def _codex_jsonl(tmp_path: Path) -> Path:
     """Write a minimal Codex session JSONL and return its path."""
     path = tmp_path / "rollout-123.jsonl"
-    path.write_text(
-        json.dumps(
+    _write_records(
+        path,
+        [
             {
                 "type": "session_meta",
                 "payload": {"id": "codex-sess", "cwd": "/tmp", "timestamp": "2024-01-01T00:00:00Z"},
-            }
-        )
-        + "\n"
-        + json.dumps(
+            },
             {
                 "type": "response_item",
                 "payload": {
@@ -40,9 +44,8 @@ def _codex_jsonl(tmp_path: Path) -> Path:
                     "content": [{"type": "text", "text": "hi"}],
                 },
                 "timestamp": "2024-01-01T00:00:01Z",
-            }
-        )
-        + "\n"
+            },
+        ],
     )
     return path
 
@@ -50,25 +53,17 @@ def _codex_jsonl(tmp_path: Path) -> Path:
 def _factory_jsonl(tmp_path: Path) -> Path:
     """Write a minimal Factory session JSONL and return its path."""
     path = tmp_path / "fact-sess.jsonl"
-    path.write_text(
-        json.dumps(
-            {
-                "type": "session_start",
-                "id": "fact-sess",
-                "cwd": "/tmp",
-                "title": "Demo",
-            }
-        )
-        + "\n"
-        + json.dumps(
+    _write_records(
+        path,
+        [
+            {"type": "session_start", "id": "fact-sess", "cwd": "/tmp", "title": "Demo"},
             {
                 "type": "message",
                 "id": "msg-1",
                 "timestamp": "2024-01-01T00:00:01Z",
                 "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},
-            }
-        )
-        + "\n"
+            },
+        ],
     )
     return path
 
@@ -76,8 +71,9 @@ def _factory_jsonl(tmp_path: Path) -> Path:
 def _claude_jsonl(tmp_path: Path) -> Path:
     """Write a minimal Claude session JSONL and return its path."""
     path = tmp_path / "claude-sess.jsonl"
-    path.write_text(
-        json.dumps(
+    _write_records(
+        path,
+        [
             {
                 "type": "user",
                 "sessionId": "claude-sess",
@@ -85,8 +81,7 @@ def _claude_jsonl(tmp_path: Path) -> Path:
                 "timestamp": "2024-01-01T00:00:01Z",
                 "message": {"role": "user", "content": "hi there"},
             }
-        )
-        + "\n"
+        ],
     )
     return path
 
@@ -94,25 +89,22 @@ def _claude_jsonl(tmp_path: Path) -> Path:
 def _omp_jsonl(tmp_path: Path) -> Path:
     """Write a minimal OMP session JSONL and return its path."""
     path = tmp_path / "omp-sess.jsonl"
-    path.write_text(
-        json.dumps(
+    _write_records(
+        path,
+        [
             {
                 "type": "session",
                 "id": "omp-sess",
                 "cwd": "/tmp",
                 "timestamp": "2024-01-01T00:00:00Z",
-            }
-        )
-        + "\n"
-        + json.dumps(
+            },
             {
                 "type": "message",
                 "id": "u1",
                 "timestamp": "2024-01-01T00:00:01Z",
                 "message": {"role": "user", "content": [{"type": "text", "text": "hi there"}]},
-            }
-        )
-        + "\n"
+            },
+        ],
     )
     return path
 
@@ -146,7 +138,6 @@ def test_detect_parser_by_path() -> None:
     factory_dir = _HOME / ".factory" / "sessions"
     claude_dir = _HOME / ".claude" / "projects"
     omp_dir = _HOME / ".omp" / "agent" / "sessions"
-
     assert watcher._detect_parser(codex_dir / "a.jsonl") is parse_codex_session
     assert watcher._detect_parser(factory_dir / "a.jsonl") is parse_factory_session
     assert watcher._detect_parser(claude_dir / "a.jsonl") is parse_claude_session
@@ -174,16 +165,13 @@ def test_index_file_routes_to_codex_normalizer(tmp_path: Path) -> None:
     codex_dir.mkdir(parents=True)
     source = _codex_jsonl(codex_dir)
     watcher, store, embedder, enricher = _make_watcher()
-
     store.get_session.return_value = {"messages": [{"id": 1, "content": "hi"}]}
     embedder.embed_batch.return_value = [[0.1, 0.2]]
     enricher.enrich.return_value = EnrichmentResult(
         summary="s", entities=[Entity(type="product", value="SQLite")]
     )
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(source)
-
     store.index_session.assert_called_once()
     session = store.index_session.call_args.args[0]
     assert isinstance(session, Session)
@@ -199,6 +187,84 @@ def test_index_file_routes_to_codex_normalizer(tmp_path: Path) -> None:
     )
 
 
+def test_index_file_embeds_only_ordinary_conversation_messages(tmp_path: Path) -> None:
+    """_index_file excludes internal roles, flags, and thinking from embeddings."""
+    codex_dir = tmp_path / ".codex" / "sessions"
+    codex_dir.mkdir(parents=True)
+    source = codex_dir / "filtered.jsonl"
+    source.write_text("")
+    session = Session(
+        id="filtered",
+        agent=AgentType.CODEX,
+        cwd="/tmp",
+        started_at=datetime.now(UTC),
+        messages=[
+            Message(MessageRole.USER, "ordinary user", datetime.now(UTC)),
+            Message(MessageRole.DEVELOPER, "developer secret", datetime.now(UTC)),
+            Message(MessageRole.USER, "injected secret", datetime.now(UTC), is_injected=True),
+            Message(MessageRole.ASSISTANT, "thinking secret", datetime.now(UTC), is_thinking=True),
+            Message(MessageRole.ASSISTANT, "ordinary assistant", datetime.now(UTC)),
+        ],
+    )
+    watcher, store, embedder, enricher = _make_watcher()
+    store.get_session.return_value = {
+        "messages": [
+            {
+                "id": i,
+                "role": m.role.value,
+                "content": m.content,
+                "is_thinking": m.is_thinking,
+                "is_system_instruction": m.is_system_instruction,
+                "is_injected": m.is_injected,
+            }
+            for i, m in enumerate(session.messages, 1)
+        ]
+    }
+    embedder.embed_batch.side_effect = [[[0.1, 0.2], [0.3, 0.4]], [[0.5, 0.6]]]
+    enricher.enrich.return_value = EnrichmentResult(summary="summary", entities=[])
+    with (
+        patch.object(watcher_module, "_HOME", tmp_path),
+        patch.dict(watcher_module._PARSERS, {AgentType.CODEX: lambda _: session}),
+    ):
+        watcher._index_file(source)
+    assert embedder.embed_batch.call_args_list[0].args == (["ordinary user", "ordinary assistant"],)
+
+
+def test_index_file_stores_review_session_without_embedding_or_enrichment(tmp_path: Path) -> None:
+    """Codex review sessions are retained for linkage but never processed for search."""
+    codex_dir = tmp_path / ".codex" / "sessions"
+    codex_dir.mkdir(parents=True)
+    source = codex_dir / "review.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "review-sess",
+                    "cwd": "/tmp",
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "parent_thread_id": "parent-sess",
+                    "source": {"subagent": {"other": "guardian"}},
+                },
+            }
+        )
+    )
+    watcher, store, embedder, enricher = _make_watcher()
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        assert watcher._index_file(source) is False
+        assert watcher.reindex_session("review-sess", clear_existing=True) is False
+    stored = store.index_session.call_args.args[0]
+    assert stored.is_review_agent
+    assert stored.parent_thread_id == "parent-sess"
+    embedder.embed_batch.assert_not_called()
+    store.get_session.assert_not_called()
+    store.upsert_embedding.assert_not_called()
+    store.set_summary.assert_not_called()
+    store.upsert_session_embedding.assert_not_called()
+    store.upsert_entities.assert_not_called()
+    enricher.enrich.assert_not_called()
+
+
 def test_index_file_routes_to_factory_normalizer(tmp_path: Path) -> None:
     """A .jsonl under the factory dir is parsed with the factory normalizer."""
     factory_dir = tmp_path / ".factory" / "sessions"
@@ -207,10 +273,8 @@ def test_index_file_routes_to_factory_normalizer(tmp_path: Path) -> None:
     watcher, store, _embedder, enricher = _make_watcher()
     store.get_session.return_value = {"messages": []}
     enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(source)
-
     session = store.index_session.call_args.args[0]
     assert isinstance(session, Session)
     assert session.agent == AgentType.FACTORY
@@ -225,10 +289,8 @@ def test_index_file_routes_to_claude_normalizer(tmp_path: Path) -> None:
     watcher, store, _embedder, enricher = _make_watcher()
     store.get_session.return_value = {"messages": []}
     enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(source)
-
     session = store.index_session.call_args.args[0]
     assert isinstance(session, Session)
     assert session.agent == AgentType.CLAUDE
@@ -243,10 +305,8 @@ def test_index_file_routes_to_omp_normalizer(tmp_path: Path) -> None:
     watcher, store, _embedder, enricher = _make_watcher()
     store.get_session.return_value = {"messages": []}
     enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(source)
-
     session = store.index_session.call_args.args[0]
     assert isinstance(session, Session)
     assert session.agent == AgentType.OMP
@@ -271,10 +331,8 @@ def test_index_file_continues_on_malformed_line(tmp_path: Path) -> None:
     )
     watcher, store, _, _ = _make_watcher()
     store.get_session.return_value = {"messages": []}
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(bad)
-
     store.index_session.assert_called_once()
     session = store.index_session.call_args.args[0]
     assert session.id == "bad"
@@ -290,10 +348,8 @@ def test_enrich_embeds_summary(tmp_path: Path) -> None:
     store.get_session.return_value = {"messages": []}
     embedder.embed_batch.return_value = [[0.5, 0.6]]
     enricher.enrich.return_value = EnrichmentResult(summary="refactoring work", entities=[])
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(source)
-
     store.set_summary.assert_called_once_with("codex-sess", "refactoring work")
     embedder.embed_batch.assert_called_once_with(["refactoring work"])
     store.upsert_session_embedding.assert_called_once_with("codex-sess", [0.5, 0.6])
@@ -307,10 +363,8 @@ def test_enrich_skips_summary_embedding_when_empty(tmp_path: Path) -> None:
     watcher, store, embedder, enricher = _make_watcher()
     store.get_session.return_value = {"messages": []}
     enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher._index_file(source)
-
     store.set_summary.assert_called_once_with("codex-sess", "")
     embedder.embed_batch.assert_not_called()
     store.upsert_session_embedding.assert_not_called()
@@ -325,15 +379,12 @@ def test_index_existing_discovers_all_watched_dirs(tmp_path: Path) -> None:
     omp = _omp_jsonl(dirs[AgentType.OMP])
     # A non-JSONL file must be skipped.
     (dirs[AgentType.CODEX] / "notes.txt").write_text("ignore")
-
     watcher, store, _embedder, enricher = _make_watcher()
     store.get_session.return_value = {"messages": []}
     store.is_session_indexed.return_value = False
     enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
-
     with patch.object(watcher_module, "_HOME", tmp_path):
         watcher.index_existing()
-
     assert store.index_session.call_count == 4
     indexed_ids = {call.args[0].id for call in store.index_session.call_args_list}
     assert indexed_ids == {"codex-sess", "fact-sess", "claude-sess", "omp-sess"}
@@ -341,6 +392,39 @@ def test_index_existing_discovers_all_watched_dirs(tmp_path: Path) -> None:
     assert factory.exists()
     assert claude.exists()
     assert omp.exists()
+
+
+def test_reindex_session_processes_only_matching_source(tmp_path: Path) -> None:
+    """Targeted re-indexing finds an archived source without processing others."""
+    dirs = _map_dirs(tmp_path)
+    archived_dir = tmp_path / ".codex" / "archived_sessions"
+    archived_dir.mkdir()
+    matching = _codex_jsonl(archived_dir)
+    other = dirs[AgentType.CODEX] / "other.jsonl"
+    other.write_text(matching.read_text().replace("codex-sess", "other-sess"))
+    watcher, store, _embedder, enricher = _make_watcher()
+    store.get_session.return_value = {"messages": []}
+    enricher.enrich.return_value = EnrichmentResult(summary="", entities=[])
+    matching.write_text(matching.read_text().replace("hi", "changed"))
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        assert watcher.reindex_session("codex-sess")
+    assert store.index_session.call_args.args[0].messages[0].content == "changed"
+    enricher.enrich.assert_called_once()
+    assert not watcher.reindex_session("missing")
+
+
+def test_reindex_missing_source_preserves_existing_enrichment(tmp_path: Path) -> None:
+    """A missing source does not clear existing enrichment data."""
+    watcher, store, _embedder, _enricher = _make_watcher()
+    store.get_session.return_value = {
+        "summary": "stale",
+        "entities": [{"entity_value": "keep"}],
+        "session_id": "missing",
+    }
+    with patch.object(watcher_module, "_HOME", tmp_path):
+        assert watcher.reindex_session("missing", clear_existing=True) is False
+    store.clear_enrichment.assert_not_called()
+    assert store.get_session.return_value["summary"] == "stale"
 
 
 def test_debounce_serializes_and_coalesces_active_files() -> None:

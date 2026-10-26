@@ -16,8 +16,10 @@ def test_repair_preserves_archive_and_creates_backup(tmp_path: Path) -> None:
     spec.loader.exec_module(module)
     path = tmp_path / "index.db"
     store = Store(path)
+    store.conn.execute("INSERT INTO sessions(id) VALUES('session')")
     store.conn.execute(
-        "INSERT INTO messages(id,content,is_thinking) VALUES(1,'visible',0),(2,'hidden',1)"
+        "INSERT INTO messages(id,session_id,role,content,is_thinking) "
+        "VALUES(1,'session','user','visible',0),(2,'session','assistant','hidden',1)"
     )
     store.conn.execute("INSERT INTO messages_fts(rowid,content) VALUES(2,'hidden')")
     store.conn.commit()

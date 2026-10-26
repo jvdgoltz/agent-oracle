@@ -12,7 +12,8 @@
 		codex: { color: '#7aa2f7', bg: 'rgba(122, 162, 247, 0.12)' },
 		factory: { color: '#ffb86c', bg: 'rgba(255, 184, 108, 0.12)' },
 		claude: { color: '#e879a0', bg: 'rgba(232, 121, 160, 0.12)' },
-		omp: { color: '#9ece6a', bg: 'rgba(158, 206, 106, 0.12)' }
+		omp: { color: '#9ece6a', bg: 'rgba(158, 206, 106, 0.12)' },
+		pi: { color: '#c0a0ff', bg: 'rgba(192, 160, 255, 0.12)' }
 	};
 
 	const fallback = { color: '#6b6b80', bg: 'rgba(107, 107, 128, 0.10)' };

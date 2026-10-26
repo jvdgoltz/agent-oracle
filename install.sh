@@ -26,9 +26,10 @@ if [[ -z "$UV_BIN" ]]; then
     echo "Error: 'uv' not found on PATH." >&2
     exit 1
 fi
+FRONTEND_AVAILABLE=true
 if [[ -z "$NODE_BIN" || -z "$NPM_BIN" ]]; then
-    echo "Error: 'node' and 'npm' must be on PATH." >&2
-    exit 1
+    FRONTEND_AVAILABLE=false
+    echo "Warning: frontend not installed; 'node' and 'npm' are not both on PATH." >&2
 fi
 
 mkdir -p "$LAUNCH_DIR" "$LOG_DIR"
@@ -89,6 +90,7 @@ PLIST
 #
 # --- Frontend plist -------------------------------------------------------
 #
+if [[ "$FRONTEND_AVAILABLE" == true ]]; then
 cat >"$LAUNCH_DIR/$LABEL_FRONTEND.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
@@ -130,6 +132,7 @@ cat >"$LAUNCH_DIR/$LABEL_FRONTEND.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+fi
 
 #
 # --- Backup plist ----------------------------------------------------------
@@ -174,8 +177,12 @@ PLIST
 echo "Loading $LABEL_BACKEND ..."
 launchctl load "$LAUNCH_DIR/$LABEL_BACKEND.plist"
 
-echo "Loading $LABEL_FRONTEND ..."
-launchctl load "$LAUNCH_DIR/$LABEL_FRONTEND.plist"
+if [[ "$FRONTEND_AVAILABLE" == true ]]; then
+    echo "Loading $LABEL_FRONTEND ..."
+    launchctl load "$LAUNCH_DIR/$LABEL_FRONTEND.plist"
+else
+    echo "Skipping $LABEL_FRONTEND (node/npm unavailable)."
+fi
 
 echo "Loading $LABEL_BACKUP ..."
 launchctl load "$LAUNCH_DIR/$LABEL_BACKUP.plist"
@@ -183,10 +190,16 @@ launchctl load "$LAUNCH_DIR/$LABEL_BACKUP.plist"
 echo ""
 echo "Agent Oracle services installed and started."
 echo "  Backend:  http://localhost:8731  (logs: $LOG_DIR/backend.{out,err}.log)"
-echo "  Frontend: http://localhost:8732  (logs: $LOG_DIR/frontend.{out,err}.log)"
+echo "  MCP:      http://127.0.0.1:8731/mcp/"
+if [[ "$FRONTEND_AVAILABLE" == true ]]; then
+    echo "  Frontend: http://localhost:8732  (logs: $LOG_DIR/frontend.{out,err}.log)"
+else
+    echo "  Frontend: not installed (node/npm unavailable)"
+fi
 echo "  Backup:   12:00 and 18:00 daily (logs: $LOG_DIR/backup.{out,err}.log)"
 echo ""
-echo "Both services will start at login and restart on crash."
+echo "Reconnect or restart open MCP clients to refresh Agent Oracle tools."
+echo "Installed services will start at login and restart on crash."
 echo "Manage them with:"
 echo "  launchctl list | grep agent-oracle"
 echo "  launchctl unload $LAUNCH_DIR/$LABEL_BACKEND.plist"
