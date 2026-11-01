@@ -15,30 +15,30 @@
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
-		"@eslint/compat": "^2.0.2",
+		"@eslint/compat": "^2.1.1",
 		"@eslint/js": "^10.0.1",
-		"@secretlint/secretlint-rule-preset-recommend": "13.0.4",
-		"@sveltejs/adapter-auto": "^7.0.0",
-		"@sveltejs/kit": "^2.50.2",
-		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@secretlint/secretlint-rule-preset-recommend": "13.0.6",
+		"@sveltejs/adapter-auto": "^8.0.0",
+		"@sveltejs/kit": "^3.0.0",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@types/node": "^26",
-		"eslint": "^10.7.0",
+		"eslint": "^10.11.0",
 		"eslint-config-prettier": "^10.1.8",
-		"eslint-plugin-svelte": "^3.14.0",
-		"globals": "^17.3.0",
-		"jscpd": "5.0.14",
-		"knip": "6.31.0",
-		"prettier": "^3.8.1",
+		"eslint-plugin-svelte": "^3.23.0",
+		"globals": "^17.13.0",
+		"jscpd": "5.4.0",
+		"knip": "6.39.0",
+		"prettier": "^3.9.9",
 		"prettier-plugin-svelte": "^4.1.1",
-		"secretlint": "13.0.4",
+		"secretlint": "13.0.6",
 		"svelte": "^5.51.0",
-		"svelte-check": "^4.4.2",
-		"typescript": "^5.9.3",
-		"typescript-eslint": "^8.54.0",
-		"vite": "^8.1.5"
+		"svelte-check": "^4.7.6",
+		"typescript": "^7.0.2",
+		"typescript-eslint": "^8.71.0",
+		"vite": "^8.3.2"
 	},
 	"dependencies": {
-		"marked": "^18.0.7"
+		"marked": "^18.0.14"
 	},
 	"overrides": {
 		"cookie": "0.7.2"
